@@ -146,6 +146,21 @@ static int mac_open(DK1HIDBackend *backend, uint16_t vid, uint16_t pid) {
     }
 
     CFIndex count = CFSetGetCount(device_set);
+    fprintf(stderr, "[DEBUG] Found %lld device(s) matching VID/PID\n", (long long)count);
+    if (count > 0) {
+        CFTypeRef *items = malloc(count * sizeof(CFTypeRef));
+        CFSetGetValues(device_set, items);
+        for (CFIndex i = 0; i < count; ++i) {
+            IOHIDDeviceRef dev = (IOHIDDeviceRef)items[i];
+            CFNumberRef v = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDVendorIDKey));
+            CFNumberRef p = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDProductIDKey));
+            int vid=0, pid=0;
+            if (v) CFNumberGetValue(v, kCFNumberIntType, &vid);
+            if (p) CFNumberGetValue(p, kCFNumberIntType, &pid);
+            fprintf(stderr, "  device %lld: VID=%04X PID=%04X\n", (long long)i, vid, pid);
+        }
+        free(items);
+    }
     if (count <= 0) {
         CFRelease(device_set);
         IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
