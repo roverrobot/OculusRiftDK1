@@ -204,6 +204,7 @@ static int mac_open(DK1HIDBackend *backend, uint16_t vid, uint16_t pid) {
     // Open the device so we can exchange feature and input reports.
     rc = IOHIDDeviceOpen(impl->device, kIOHIDOptionsTypeNone);
     if (rc != kIOReturnSuccess) {
+        fprintf(stderr, "[DEBUG] IOHIDDeviceOpen failed: 0x%08X\n", (unsigned)rc);
         CFRelease(impl->device);
         impl->device = NULL;
         IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
@@ -214,6 +215,7 @@ static int mac_open(DK1HIDBackend *backend, uint16_t vid, uint16_t pid) {
         free(impl);
         return DK1_ERROR_OPEN_FAILED;
     }
+    fprintf(stderr, "[DEBUG] IOHIDDeviceOpen succeeded, device opened.\n");
     impl->device_opened = true;
 
     backend->impl = impl;
@@ -474,6 +476,8 @@ static void hid_input_report_callback(
     /* Forward the raw report to the registered callback. The library
     guarantees that the callback receives a normalized 62‑byte
     report, so no further processing is required here. */
+    // Debug: confirm callback invocation
+    fprintf(stderr, "[DEBUG] HID report received: len=%lld id=%d\n", (long long)reportLength, (int)reportID);
     impl->report_cb(report, (size_t)reportLength, impl->user_data);
 }
 /*
