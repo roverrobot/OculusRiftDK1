@@ -2,9 +2,12 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
+#include <string.h>
 #include "DK1Tracker/DK1Tracker.h"
 
 static volatile int keep_running = 1;
+// Flag to print raw report bytes.
+volatile int dump_raw = 0;
 
 static void handle_sigint(int sig) {
     keep_running = 0;
@@ -19,10 +22,16 @@ static void on_sample(const DK1Sample *sample, void *user_data) {
            sample->temperature_c);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     signal(SIGINT, handle_sigint);
     
     DK1Tracker *tracker = NULL;
+    // Parse command‑line options.
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--raw") == 0) {
+            dump_raw = 1;
+        }
+    }
     if (dk1_tracker_create(&tracker) != DK1_OK) {
         fprintf(stderr, "Failed to create tracker\n");
         return 1;

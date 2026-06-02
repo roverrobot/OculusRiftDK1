@@ -6,6 +6,11 @@
 #include "DK1RingBuffer.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdint.h>
+
+// Flag set by the example to trigger raw report printing.
+extern volatile int dump_raw;
 
 struct DK1Tracker {
     DK1HIDBackend backend;
@@ -17,11 +22,22 @@ struct DK1Tracker {
     
     int is_open;
     int is_started;
+    // Keepalive command ID counter for feature reports.
+    uint16_t keepalive_cmd_id;
 };
 
 static void internal_report_cb(const uint8_t *data, size_t length, void *user_data) {
     DK1Tracker *tracker = (DK1Tracker *)user_data;
     
+    /* Optional raw dump for debugging */
+    if (dump_raw) {
+        printf("RAW: ");
+        for (size_t i = 0; i < length; ++i) {
+            printf(" %02X", data[i]);
+        }
+        printf("\n");
+    }
+
     DK1Sample samples[3];
     size_t count = 0;
     if (dk1_parse_input_report(data, length, samples, 3, &count) == DK1_OK) {
@@ -42,6 +58,7 @@ int dk1_tracker_create(DK1Tracker **out_tracker) {
     dk1_hid_backend_create_mac(&tracker->backend);
     dk1_estimator_init(&tracker->estimator);
     dk1_ring_buffer_init(&tracker->ring_buffer);
+    tracker->keepalive_cmd_id = 0;
     
     *out_tracker = tracker;
     return DK1_OK;
@@ -101,11 +118,15 @@ int dk1_tracker_poll_sample(DK1Tracker *tracker, DK1Sample *out_sample) {
 int dk1_tracker_set_keepalive(DK1Tracker *tracker, uint16_t interval_ms) {
     if (!tracker || !tracker->is_open) return DK1_ERROR_NOT_OPEN;
     
-    uint8_t report[4];
+    // Pack a 5‑byte feature report: ID=8, cmd id, interval.
+    uint8_t report[5];
     report[0] = 8; // Report ID
-    report[1] = 0; // Command ID Low
-    report[2] = 0; // Command ID High
-    report[3] = (uint8_t)(interval_ms & 0xFF); // Interval Low (Stub)
+    report[1] = (uint8_t)(tracker->keepalive_cmd_id & 0xFF); // Command ID low
+    report[2] = (uint8_t)((tracker->keepalive_cmd_id >> 8) & 0xFF); // high
+    report[3] = (uint8_t)(interval_ms & 0xFF); // interval low
+    report[4] = (uint8_t)((interval_ms >> 8) & 0xFF); // high
+    // Increment command ID for next call.
+    tracker->keepalive_cmd_id++;
     
     return tracker->backend.set_feature_report(&tracker->backend, report, sizeof(report));
 }

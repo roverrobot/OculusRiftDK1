@@ -15,11 +15,26 @@ This library provides a user-space HID interface to the DK1 tracker, allowing fo
 ## Build Instructions
 Use CMake to build the project:
 
-\`\`\`bash
+```bash
 cmake -S . -B build
 cmake --build build
-\`\`\`
+```
+
+## Distribution
+A `dist` target is provided that stages a clean install of the library, headers, README, and `dk1_dump` example into a versioned directory, then packages it as a gzip-compressed tarball:
+
+```bash
+cmake --build build --target dist
+# -> build/DK1Tracker-<version>.tar.gz
+```
+
+The tarball layout follows the standard GNUInstallDirs tree (`lib/`, `bin/`, `include/`, `share/doc/<project>/`), so it can be extracted and installed system-wide with `cmake --install`.
 
 ## Important Notes
-- The parser bit layout for packed motion samples needs verification against the official DK1 tracker firmware specification.
-- This implementation currently provides a skeleton for orientation estimation and HID communication.
+* The parser bit layout for packed motion samples needs verification against the official DK1 tracker firmware specification.
+* This implementation currently provides a skeleton for orientation estimation and HID communication.
+* When creating tarballs on macOS, AppleDouble metadata files (e.g. `._CMakeLists.txt`) are automatically excluded by specifying `COPYFILE_DISABLE=1`:
+  ```bash
+  COPYFILE_DISABLE=1 tar -czf DK1Tracker-<version>.tar.gz DK1Tracker-<version>
+  ```
+* The example `dk1_dump` now supports a `--raw` flag to print raw report bytes before the parsed values.

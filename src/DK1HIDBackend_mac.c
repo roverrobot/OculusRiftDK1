@@ -1,194 +1,446 @@
 #include "DK1HIDBackend.h"
 #include "DK1Tracker/DK1Error.h"
+
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/hid/IOHIDDevice.h>
 #include <IOKit/hid/IOHIDKeys.h>
-#include <IOKit/IOMessage.h>
 #include <CoreFoundation/CoreFoundation.h>
+
 #include <pthread.h>
 #include <stdlib.h>
-#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
 #include <stdbool.h>
+
+// Per the DK1 tracker firmware specification, input Report ID 1 is 62 bytes.
+// We pre-allocate a 64-byte input report buffer so the IOHID callback can
+// write into it without ever doing a heap allocation on the HID thread.
+#define DK1_INPUT_REPORT_BUF_LEN 64
 
 typedef struct {
     IOHIDManagerRef manager;
-    IOHIDDeviceRef device;
-    pthread_t loop_thread;
-    bool running;
-    void (*report_cb)(const uint8_t *data, size_t length, void *user_data);
-    void *user_data;
-    uint8_t *input_report_buf;
-    CFIndex input_report_len;
+    IOHIDDeviceRef  device;       // retained while open
+    bool            device_opened;
+
+    pthread_t       loop_thread;
+    bool            loop_thread_running;
+    pthread_mutex_t ready_mutex;
+    pthread_cond_t  ready_cond;
+    bool            run_loop_ready;
+    CFRunLoopRef    run_loop;     // retained while thread is running
+
+    void          (*report_cb)(const uint8_t *data, size_t length, void *user_data);
+    void           *user_data;
+
+    uint8_t        *input_report_buf;
 } MacHIDImpl;
 
-static void hid_report_callback(void *context, IOReturn result, void *sender, IOHIDReportType type, uint32_t reportID, uint8_t *report, CFIndex length) {
-    MacHIDImpl *impl = (MacHIDImpl *)context;
-    if (impl && impl->report_cb) {
-        impl->report_cb(report, (size_t)length, impl->user_data);
-    }
-}
-
-static void *run_loop_thread(void *arg) {
-    MacHIDImpl *impl = (MacHIDImpl *)arg;
-    CFRunLoopRun();
-    return NULL;
-}
+// Forward declarations.
+static void hid_input_report_callback(
+    void *context,
+    IOReturn result,
+    void *sender,
+    IOHIDReportType type,
+    uint32_t reportID,
+    uint8_t *report,
+    CFIndex reportLength
+);
 
 static int mac_open(DK1HIDBackend *backend, uint16_t vid, uint16_t pid) {
     MacHIDImpl *impl = calloc(1, sizeof(MacHIDImpl));
     if (!impl) return DK1_ERROR_IO;
 
-    impl->manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
-    if (!impl->manager) {
+    if (pthread_mutex_init(&impl->ready_mutex, NULL) != 0) {
         free(impl);
         return DK1_ERROR_IO;
     }
-    
-    CFMutableDictionaryRef match = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    
-    int v_id = vid;
-    int p_id = pid;
+    if (pthread_cond_init(&impl->ready_cond, NULL) != 0) {
+        pthread_mutex_destroy(&impl->ready_mutex);
+        free(impl);
+        return DK1_ERROR_IO;
+    }
+
+    impl->input_report_buf = malloc(DK1_INPUT_REPORT_BUF_LEN);
+    if (!impl->input_report_buf) {
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
+        free(impl);
+        return DK1_ERROR_IO;
+    }
+
+    impl->manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+    if (!impl->manager) {
+        free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
+        free(impl);
+        return DK1_ERROR_IO;
+    }
+
+    CFMutableDictionaryRef match = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks
+    );
+    if (!match) {
+        CFRelease(impl->manager);
+        free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
+        free(impl);
+        return DK1_ERROR_IO;
+    }
+
+    int v_id = (int)vid;
+    int p_id = (int)pid;
     CFNumberRef v_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &v_id);
     CFNumberRef p_num = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &p_id);
-    
-    CFDictionarySetValue(match, CFSTR(kIOHIDVendorIDKey), v_num);
+    if (!v_num || !p_num) {
+        if (v_num) CFRelease(v_num);
+        if (p_num) CFRelease(p_num);
+        CFRelease(match);
+        CFRelease(impl->manager);
+        free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
+        free(impl);
+        return DK1_ERROR_IO;
+    }
+
+    CFDictionarySetValue(match, CFSTR(kIOHIDVendorIDKey),  v_num);
     CFDictionarySetValue(match, CFSTR(kIOHIDProductIDKey), p_num);
-    
     IOHIDManagerSetDeviceMatching(impl->manager, match);
-    
+
     CFRelease(v_num);
     CFRelease(p_num);
     CFRelease(match);
 
-    if (IOHIDManagerOpen(impl->manager, kIOHIDOptionsTypeNone) != kIOReturnSuccess) {
+    IOReturn rc = IOHIDManagerOpen(impl->manager, kIOHIDOptionsTypeNone);
+    if (rc != kIOReturnSuccess) {
         CFRelease(impl->manager);
+        free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
         free(impl);
         return DK1_ERROR_OPEN_FAILED;
     }
 
-    // Allocate buffer for input reports
-    impl->input_report_buf = malloc(64);
-    impl->input_report_len = 64;
-    if (!impl->input_report_buf) {
-        IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
-        CFRelease(impl->manager);
-        free(impl);
-        return DK1_ERROR_IO;
-    }
-
-    // Use IOHIDManagerCopyDevices to obtain a set of matching devices.
+    // Pull matching devices out of the manager. CFSet is unordered, so we
+    // cannot use CFSetGetValue(set, index); we must materialize the values
+    // into a C array first, then retain the chosen device.
     CFSetRef device_set = IOHIDManagerCopyDevices(impl->manager);
     if (!device_set) {
         IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
         CFRelease(impl->manager);
         free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
         free(impl);
         return DK1_ERROR_NOT_FOUND;
     }
 
-    CFIndex device_count = CFSetGetCount(device_set);
-    if (device_count == 0) {
+    CFIndex count = CFSetGetCount(device_set);
+    if (count <= 0) {
         CFRelease(device_set);
         IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
         CFRelease(impl->manager);
         free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
         free(impl);
         return DK1_ERROR_NOT_FOUND;
     }
 
-    // Grab the first device from the set.
-    impl->device = (IOHIDDeviceRef)CFSetGetValue(device_set, 0);
-    if (!impl->device) {
+    IOHIDDeviceRef *devices = calloc((size_t)count, sizeof(IOHIDDeviceRef));
+    if (!devices) {
         CFRelease(device_set);
         IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
         CFRelease(impl->manager);
         free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
         free(impl);
-        return DK1_ERROR_NOT_FOUND;
+        return DK1_ERROR_IO;
     }
+
+    CFSetGetValues(device_set, (const void **)devices);
+    impl->device = devices[0];        // borrow; retain below
+    free(devices);
     CFRelease(device_set);
+
+    if (!impl->device) {
+        IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
+        CFRelease(impl->manager);
+        free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
+        free(impl);
+        return DK1_ERROR_NOT_FOUND;
+    }
+
+    CFRetain(impl->device);
+
+    // Open the device so we can exchange feature and input reports.
+    rc = IOHIDDeviceOpen(impl->device, kIOHIDOptionsTypeNone);
+    if (rc != kIOReturnSuccess) {
+        CFRelease(impl->device);
+        impl->device = NULL;
+        IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
+        CFRelease(impl->manager);
+        free(impl->input_report_buf);
+        pthread_cond_destroy(&impl->ready_cond);
+        pthread_mutex_destroy(&impl->ready_mutex);
+        free(impl);
+        return DK1_ERROR_OPEN_FAILED;
+    }
+    impl->device_opened = true;
 
     backend->impl = impl;
     return DK1_OK;
 }
 
 static void mac_close(DK1HIDBackend *backend) {
+    if (!backend || !backend->impl) return;
     MacHIDImpl *impl = (MacHIDImpl *)backend->impl;
-    if (!impl) return;
 
-    if (impl->running) {
-        // In a real impl, we'd use a handle to the RunLoop
-        pthread_cancel(impl->loop_thread);
+    // If the run loop thread is still alive, stop and join it first so we
+    // are not tearing down state it may be touching.
+    if (impl->loop_thread_running) {
+        if (impl->run_loop) {
+            CFRunLoopStop(impl->run_loop);
+        }
         pthread_join(impl->loop_thread, NULL);
+        impl->loop_thread_running = false;
+    }
+    if (impl->run_loop) {
+        CFRelease(impl->run_loop);
+        impl->run_loop = NULL;
     }
 
-    if (impl->device) CFRelease(impl->device);
+    if (impl->device) {
+        if (impl->device_opened) {
+            IOHIDDeviceClose(impl->device, kIOHIDOptionsTypeNone);
+            impl->device_opened = false;
+        }
+        CFRelease(impl->device);
+        impl->device = NULL;
+    }
+
     if (impl->manager) {
         IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
         CFRelease(impl->manager);
+        impl->manager = NULL;
     }
-    if (impl->input_report_buf) free(impl->input_report_buf);
+
+    if (impl->input_report_buf) {
+        free(impl->input_report_buf);
+        impl->input_report_buf = NULL;
+    }
+
+    pthread_cond_destroy(&impl->ready_cond);
+    pthread_mutex_destroy(&impl->ready_mutex);
+
     free(impl);
     backend->impl = NULL;
 }
 
 static int mac_is_open(const DK1HIDBackend *backend) {
-    return backend->impl ? DK1_OK : DK1_ERROR_NOT_OPEN;
+    return (backend && backend->impl) ? DK1_OK : DK1_ERROR_NOT_OPEN;
+}
+
+static void *run_loop_thread_main(void *arg) {
+    MacHIDImpl *impl = (MacHIDImpl *)arg;
+    if (!impl) return NULL;
+
+    // Capture the run loop this thread owns so stop() can wake us up.
+    CFRunLoopRef rl = CFRunLoopGetCurrent();
+    CFRetain(rl);
+
+    pthread_mutex_lock(&impl->ready_mutex);
+    impl->run_loop = rl;
+    impl->run_loop_ready = true;
+    pthread_cond_signal(&impl->ready_cond);
+    pthread_mutex_unlock(&impl->ready_mutex);
+
+    CFRunLoopRun();
+
+    // CFRunLoopStop has returned control here. Unschedule and unregister
+    // before we hand control back to the joiner.
+    if (impl->device) {
+        IOHIDDeviceUnscheduleFromRunLoop(impl->device, rl, kCFRunLoopDefaultMode);
+        IOHIDDeviceRegisterInputReportCallback(
+            impl->device, impl->input_report_buf, DK1_INPUT_REPORT_BUF_LEN,
+            NULL, impl
+        );
+    }
+
+    // Drop our own reference; close() will release the impl's reference.
+    CFRelease(rl);
+    return NULL;
 }
 
 static int mac_start(DK1HIDBackend *backend) {
     MacHIDImpl *impl = (MacHIDImpl *)backend->impl;
-    if (!impl || !impl->device) return DK1_ERROR_NOT_OPEN;
+    if (!impl || !impl->device || !impl->device_opened) {
+        return DK1_ERROR_NOT_OPEN;
+    }
+    if (impl->loop_thread_running) {
+        return DK1_OK; // already started
+    }
 
-    // Register input report callback; use the preallocated buffer.
-    IOHIDDeviceRegisterInputReportCallback(impl->device, impl->input_report_buf, impl->input_report_len, hid_report_callback, impl);
-    
-    impl->running = true;
-    pthread_create(&impl->loop_thread, NULL, run_loop_thread, impl);
-    
+    impl->run_loop_ready = false;
+
+    int rc = pthread_create(&impl->loop_thread, NULL, run_loop_thread_main, impl);
+    if (rc != 0) {
+        return DK1_ERROR_IO;
+    }
+    impl->loop_thread_running = true;
+
+    // Wait for the HID thread to publish its run loop. We cannot schedule
+    // the device until that has happened, otherwise reports may be dropped.
+    pthread_mutex_lock(&impl->ready_mutex);
+    while (!impl->run_loop_ready) {
+        pthread_cond_wait(&impl->ready_cond, &impl->ready_mutex);
+    }
+    pthread_mutex_unlock(&impl->ready_mutex);
+
+    // Schedule the device on the HID thread's run loop and register the
+    // input report callback. The callback uses impl->input_report_buf,
+    // which is owned by the impl and must outlive the run loop.
+    IOHIDDeviceScheduleWithRunLoop(impl->device, impl->run_loop, kCFRunLoopDefaultMode);
+    IOHIDDeviceRegisterInputReportCallback(
+        impl->device,
+        impl->input_report_buf,
+        DK1_INPUT_REPORT_BUF_LEN,
+        hid_input_report_callback,
+        impl
+    );
+
     return DK1_OK;
 }
 
 static void mac_stop(DK1HIDBackend *backend) {
     MacHIDImpl *impl = (MacHIDImpl *)backend->impl;
-    if (!impl || !impl->running) return;
-    
-    impl->running = false;
+    if (!impl || !impl->loop_thread_running) return;
+
+    if (impl->run_loop) {
+        CFRunLoopStop(impl->run_loop);
+    }
+    pthread_join(impl->loop_thread, NULL);
+    impl->loop_thread_running = false;
+
+    if (impl->run_loop) {
+        CFRelease(impl->run_loop);
+        impl->run_loop = NULL;
+    }
 }
 
-static int mac_get_feature_report(DK1HIDBackend *backend, uint8_t report_id, uint8_t *buffer, size_t length) {
+static int mac_get_feature_report(
+    DK1HIDBackend *backend,
+    uint8_t report_id,
+    uint8_t *buffer,
+    size_t length
+) {
+    if (!backend || !buffer || length == 0) return DK1_ERROR_INVALID_ARGUMENT;
     MacHIDImpl *impl = (MacHIDImpl *)backend->impl;
-    if (!impl || !impl->device) return DK1_ERROR_IO;
-    
-    CFIndex lenVar = length;
-    CFIndex len = IOHIDDeviceGetReport(impl->device, kIOHIDReportTypeFeature, report_id, buffer, &lenVar);
-    return (lenVar > 0) ? DK1_OK : DK1_ERROR_IO;
+    if (!impl || !impl->device || !impl->device_opened) {
+        return DK1_ERROR_NOT_OPEN;
+    }
+
+    // IOHIDDeviceGetReport uses the report ID in its argument and does not
+    // require it to also be encoded as buffer[0]. The DK1 keepalive uses
+    // report ID 8; the caller passes it explicitly via `report_id`.
+    CFIndex reportLength = (CFIndex)length;
+    IOReturn rc = IOHIDDeviceGetReport(
+        impl->device,
+        kIOHIDReportTypeFeature,
+        (CFIndex)report_id,
+        buffer,
+        &reportLength
+    );
+    if (rc != kIOReturnSuccess) {
+        return DK1_ERROR_IO;
+    }
+    return DK1_OK;
 }
 
-static int mac_set_feature_report(DK1HIDBackend *backend, const uint8_t *buffer, size_t length) {
+static int mac_set_feature_report(
+    DK1HIDBackend *backend,
+    const uint8_t *buffer,
+    size_t length
+) {
+    if (!backend || !buffer || length == 0) return DK1_ERROR_INVALID_ARGUMENT;
     MacHIDImpl *impl = (MacHIDImpl *)backend->impl;
-    if (!impl || !impl->device) return DK1_ERROR_IO;
-    
-    CFIndex lenVar = length;
-    CFIndex len = IOHIDDeviceSetReport(impl->device, kIOHIDReportTypeFeature, 0, buffer, lenVar);
-    return (lenVar > 0) ? DK1_OK : DK1_ERROR_IO;
+    if (!impl || !impl->device || !impl->device_opened) {
+        return DK1_ERROR_NOT_OPEN;
+    }
+
+    // The report ID is the first byte of the feature report payload, per
+    // the DK1 firmware specification. We pull it out and hand the body
+    // (without the ID prefix) to IOHIDDeviceSetReport.
+    uint8_t report_id = buffer[0];
+    const uint8_t *body = buffer + 1;
+    size_t body_len = length - 1;
+
+    CFIndex reportLength = (CFIndex)body_len;
+    IOReturn rc = IOHIDDeviceSetReport(
+        impl->device,
+        kIOHIDReportTypeFeature,
+        (CFIndex)report_id,
+        (uint8_t *)body,
+        reportLength
+    );
+    if (rc != kIOReturnSuccess) {
+        return DK1_ERROR_IO;
+    }
+    return DK1_OK;
 }
 
-static void mac_set_raw_report_callback(DK1HIDBackend *backend, void (*callback)(const uint8_t *data, size_t length, void *user_data), void *user_data) {
+static void mac_set_raw_report_callback(
+    DK1HIDBackend *backend,
+    void (*callback)(const uint8_t *data, size_t length, void *user_data),
+    void *user_data
+) {
     MacHIDImpl *impl = (MacHIDImpl *)backend->impl;
     if (!impl) return;
     impl->report_cb = callback;
     impl->user_data = user_data;
 }
 
+// IOHID input report callback. Runs on the HID thread's run loop. Keep it
+// minimal: just hand the buffer to the registered callback. No allocation,
+// no I/O, no logging.
+static void hid_input_report_callback(
+    void *context,
+    IOReturn result,
+    void *sender,
+    IOHIDReportType type,
+    uint32_t reportID,
+    uint8_t *report,
+    CFIndex reportLength
+) {
+    (void)result;
+    (void)sender;
+    (void)type;
+    (void)reportID;
+
+    MacHIDImpl *impl = (MacHIDImpl *)context;
+    if (!impl || !impl->report_cb || !report || reportLength <= 0) {
+        return;
+    }
+    impl->report_cb(report, (size_t)reportLength, impl->user_data);
+}
+
 int dk1_hid_backend_create_mac(DK1HIDBackend *backend) {
-    backend->open = mac_open;
-    backend->close = mac_close;
-    backend->is_open = mac_is_open;
-    backend->start = mac_start;
-    backend->stop = mac_stop;
-    backend->get_feature_report = mac_get_feature_report;
-    backend->set_feature_report = mac_set_feature_report;
+    if (!backend) return DK1_ERROR_INVALID_ARGUMENT;
+    memset(backend, 0, sizeof(*backend));
+    backend->open                  = mac_open;
+    backend->close                 = mac_close;
+    backend->is_open               = mac_is_open;
+    backend->start                 = mac_start;
+    backend->stop                  = mac_stop;
+    backend->get_feature_report    = mac_get_feature_report;
+    backend->set_feature_report    = mac_set_feature_report;
     backend->set_raw_report_callback = mac_set_raw_report_callback;
     return DK1_OK;
 }
