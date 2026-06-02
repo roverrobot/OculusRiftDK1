@@ -1,0 +1,15 @@
+#ifndef DK1_ERROR_H
+#define DK1_ERROR_H
+
+typedef enum {
+    DK1_OK = 0,
+    DK1_ERROR_INVALID_ARGUMENT,
+    DK1_ERROR_NOT_FOUND,
+    DK1_ERROR_OPEN_FAILED,
+    DK1_ERROR_IO,
+    DK1_ERROR_NOT_OPEN,
+    DK1_ERROR_UNSUPPORTED,
+    DK1_ERROR_PARSE
+} DK1Error;
+
+#endif // DK1_ERROR_H
