@@ -4,11 +4,23 @@
 #include <unistd.h>
 #include <string.h>
 #include "DK1Tracker/DK1Tracker.h"
+#include <stdint.h>
 
 static volatile int keep_running = 1;
-// The library exposes a global flag that the example sets when
-// `--raw` is provided.  Declared here to satisfy the external reference.
-volatile int dump_raw = 0;
+// Raw report flag and callback are handled via the public API; no global
+// variables are required.
+static int raw_enabled = 0;
+
+// Callback that prints raw reports; defined outside main for clarity.
+static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
+    (void)ud;
+    printf("raw[%zu]: ", len);
+    for (size_t i = 0; i < len; ++i) {
+        printf("%02X", data[i]);
+        if (i + 1 < len) printf(" ");
+    }
+    printf("\n");
+}
 
 static void handle_sigint(int sig) {
     keep_running = 0;
@@ -30,7 +42,7 @@ int main(int argc, char *argv[]) {
     // Parse command‑line options.
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--raw") == 0) {
-            dump_raw = 1;
+            raw_enabled = 1;
         }
     }
     if (dk1_tracker_create(&tracker) != DK1_OK) {
@@ -46,6 +58,10 @@ int main(int argc, char *argv[]) {
     
     dk1_tracker_set_keepalive(tracker, 10000);
     dk1_tracker_set_sample_callback(tracker, on_sample, NULL);
+
+    if (raw_enabled) {
+        dk1_tracker_set_raw_report_callback(tracker, raw_print_cb, NULL);
+    }
     
     if (dk1_tracker_start(tracker) != DK1_OK) {
         fprintf(stderr, "Failed to start tracker\n");
