@@ -32,8 +32,8 @@ target_include_directories(DK1Tracker PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-# Example
-add_executable(dk1_dump MACOSX_BUNDLE examples/dk1_dump.c)
+# Example – build as a normal command line binary
+add_executable(dk1_dump examples/dk1_dump.c)
 target_link_libraries(dk1_dump PRIVATE DK1Tracker)
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,6 @@ install(TARGETS DK1Tracker
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(TARGETS dk1_dump
-    BUNDLE  DESTINATION ${CMAKE_INSTALL_BINDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
