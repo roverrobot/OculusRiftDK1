@@ -32,7 +32,13 @@ typedef struct {
     void          (*report_cb)(const uint8_t *data, size_t length, void *user_data);
     void           *user_data;
 
+    // Buffer supplied to IOHID for incoming reports. The device may
+    // provide the Report ID as a separate argument; in that case the
+    // callback must construct a normalized report. This buffer is
+    // used as the raw data sink.
     uint8_t        *input_report_buf;
+    // Temporary buffer for constructing a normalized 62‑byte report.
+    uint8_t         normalized_report_buf[DK1_INPUT_REPORT_BUF_LEN];
 } MacHIDImpl;
 
 // Forward declarations.
