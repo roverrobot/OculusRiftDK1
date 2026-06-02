@@ -9,6 +9,7 @@
 #include <IOKit/hid/IOHIDKeys.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <stdint.h>
+#include <time.h>
 
 static volatile int keep_running = 1;
 // By default, **do not** dump raw reports.  Users can enable with
@@ -16,9 +17,35 @@ static volatile int keep_running = 1;
 // dumping).  The logic that sets the flag was updated accordingly.
 static int raw_enabled = 0;
 
+// Helper to read little‑endian u16
+static uint16_t read_u16_le(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+// Helper to read little‑endian i16
+static int16_t read_i16_le(const uint8_t *p) {
+    return (int16_t)p[0] | ((int16_t)p[1] << 8);
+}
+
 static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
     (void)ud;
-    printf("raw[%zu]: ", len);
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    double host_ts = ts.tv_sec + ts.tv_nsec * 1e-9;
+    if (len >= 62 && data[0] == 1) {
+        uint16_t sample_count = data[1];
+        uint16_t timestamp = read_u16_le(data + 2);
+        uint16_t last_cmd = read_u16_le(data + 4);
+        int16_t temp_raw = read_i16_le(data + 6);
+        double temp_c = temp_raw / 100.0;
+        int16_t magx = read_i16_le(data + 56);
+        int16_t magy = read_i16_le(data + 58);
+        int16_t magz = read_i16_le(data + 60);
+        printf("raw[%zu] host=%.6f id=%u count=%u ts=%u last=%u temp=%.2fC mag=(%d,%d,%d): ",
+               len, host_ts, data[0], sample_count, timestamp, last_cmd, temp_c, magx, magy, magz);
+    } else {
+        printf("raw[%zu] host=%.6f unrecognized: ", len, host_ts);
+    }
     for (size_t i = 0; i < len; ++i) {
         printf("%02X", data[i]);
         if (i + 1 < len) printf(" ");
