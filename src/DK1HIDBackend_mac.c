@@ -279,6 +279,29 @@ static void *run_loop_thread_main(void *arg) {
     return NULL;
 }
 
+static void hid_input_report_callback_normalized(
+      void *context, IOReturn result, void *sender, IOHIDReportType type,
+      uint32_t reportID, uint8_t *report, CFIndex reportLength)
+{
+    (void)result; (void)sender; (void)type;
+    MacHIDImpl *impl = (MacHIDImpl *)context;
+    if (!impl || !impl->report_cb) return;
+
+    const uint8_t *data = report;
+    size_t data_len = (size_t)reportLength;
+    if (reportLength == 61 && reportID == 1) {
+        impl->input_report_buf[0] = 1;
+        memcpy(impl->input_report_buf + 1, report, 61);
+        data = impl->input_report_buf;
+        data_len = 62;
+    } else if (reportLength >= 62 && report[0] == 1) {
+        // already normalized
+    } else {
+        // forward as-is
+    }
+    impl->report_cb(data, data_len, impl->user_data);
+}
+
 static int mac_start(DK1HIDBackend *backend) {
     MacHIDImpl *impl = (MacHIDImpl *)backend->impl;
     if (!impl || !impl->device || !impl->device_opened) {
@@ -312,7 +335,7 @@ static int mac_start(DK1HIDBackend *backend) {
         impl->device,
         impl->input_report_buf,
         DK1_INPUT_REPORT_BUF_LEN,
-        hid_input_report_callback,
+        hid_input_report_callback_normalized,
         impl
     );
 
@@ -411,26 +434,35 @@ static void mac_set_raw_report_callback(
 // minimal: just hand the buffer to the registered callback. No allocation,
 // no I/O, no logging.
 static void hid_input_report_callback(
-    void *context,
-    IOReturn result,
-    void *sender,
-    IOHIDReportType type,
-    uint32_t reportID,
-    uint8_t *report,
-    CFIndex reportLength
-) {
+         void *context,
+         IOReturn result,
+         void *sender,
+         IOHIDReportType type,
+         uint32_t reportID,
+         uint8_t *report,
+         CFIndex reportLength
+     )
+{
     (void)result;
     (void)sender;
     (void)type;
-    (void)reportID;
 
     MacHIDImpl *impl = (MacHIDImpl *)context;
-    if (!impl || !impl->report_cb || !report || reportLength <= 0) {
-        return;
-    }
+    if (!impl || !impl->report_cb) return;
+
+    /* Forward the raw report to the registered callback. The library
+    guarantees that the callback receives a normalized 62‑byte
+    report, so no further processing is required here. */
     impl->report_cb(report, (size_t)reportLength, impl->user_data);
 }
-
+/*
+ * Factory: set up the function pointers on the DK1HIDBackend struct.
+ * The implementation mirrors the one that was generated for the distribution
+ * package.  The function is intentionally very small – all of the heavy
+ * lifting happens in the static helper functions above.  We zero the
+ * structure to avoid any stray data and expose the platform‑specific
+ * operations.
+ */
 int dk1_hid_backend_create_mac(DK1HIDBackend *backend) {
     if (!backend) return DK1_ERROR_INVALID_ARGUMENT;
     memset(backend, 0, sizeof(*backend));

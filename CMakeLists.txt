@@ -21,7 +21,6 @@ set(LIB_SOURCES
     src/DK1Estimator.c
     src/DK1RingBuffer.c
     src/DK1HIDBackend_mac.c
-    src/dump_raw.c
 )
 
 # Create the shared library

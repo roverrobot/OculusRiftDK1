@@ -9,9 +9,6 @@
 #include <stdio.h>
 #include <stdint.h>
 
-// Flag set by the example to trigger raw report printing.
-extern volatile int dump_raw;
-
 struct DK1Tracker {
     DK1HIDBackend backend;
     DK1Estimator estimator;
@@ -19,6 +16,9 @@ struct DK1Tracker {
     
     DK1SampleCallback user_callback;
     void *user_callback_data;
+
+    DK1RawReportCallback raw_callback;
+    void *raw_callback_data;
     
     int is_open;
     int is_started;
@@ -29,13 +29,9 @@ struct DK1Tracker {
 static void internal_report_cb(const uint8_t *data, size_t length, void *user_data) {
     DK1Tracker *tracker = (DK1Tracker *)user_data;
     
-    /* Optional raw dump for debugging */
-    if (dump_raw) {
-        printf("RAW: ");
-        for (size_t i = 0; i < length; ++i) {
-            printf(" %02X", data[i]);
-        }
-        printf("\n");
+    /* Forward raw report to user callback if registered */
+    if (tracker->raw_callback) {
+        tracker->raw_callback(data, length, tracker->raw_callback_data);
     }
 
     DK1Sample samples[3];
@@ -108,6 +104,13 @@ void dk1_tracker_set_sample_callback(DK1Tracker *tracker, DK1SampleCallback call
     if (!tracker) return;
     tracker->user_callback = callback;
     tracker->user_callback_data = user_data;
+}
+
+int dk1_tracker_set_raw_report_callback(DK1Tracker *tracker, DK1RawReportCallback callback, void *user_data) {
+    if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
+    tracker->raw_callback = callback;
+    tracker->raw_callback_data = user_data;
+    return DK1_OK;
 }
 
 int dk1_tracker_poll_sample(DK1Tracker *tracker, DK1Sample *out_sample) {

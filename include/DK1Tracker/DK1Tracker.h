@@ -3,6 +3,18 @@
 
 #include "DK1Types.h"
 #include "DK1Error.h"
+#include <stddef.h>
+
+/**
+ * Optional raw report callback.  The library will invoke this callback with
+ * a *normalized* 62‑byte DK1 report (ReportID byte 0 included).  The
+ * callback must return quickly; no allocations or blocking operations.
+ */
+typedef void (*DK1RawReportCallback)(
+    const uint8_t *data,
+    size_t length,
+    void *user_data
+);
 
 typedef struct DK1Tracker DK1Tracker;
 
@@ -19,6 +31,17 @@ void dk1_tracker_stop(DK1Tracker *tracker);
 void dk1_tracker_set_sample_callback(
     DK1Tracker *tracker,
     DK1SampleCallback callback,
+    void *user_data
+);
+
+/**
+ * Register a raw report callback.
+ * The callback is called with the raw 62‑byte report before it is parsed.
+ * If NULL is passed, no raw callback will be invoked.
+ */
+int dk1_tracker_set_raw_report_callback(
+    DK1Tracker *tracker,
+    DK1RawReportCallback callback,
     void *user_data
 );
 

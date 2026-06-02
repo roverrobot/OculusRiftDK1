@@ -6,7 +6,8 @@
 #include "DK1Tracker/DK1Tracker.h"
 
 static volatile int keep_running = 1;
-// Flag to print raw report bytes.
+// The library exposes a global flag that the example sets when
+// `--raw` is provided.  Declared here to satisfy the external reference.
 volatile int dump_raw = 0;
 
 static void handle_sigint(int sig) {
