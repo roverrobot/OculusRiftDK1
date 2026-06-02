@@ -1,4 +1,0 @@
-/Users/jma/dev/OculusRiftDK1/build/CMakeFiles/DK1Tracker.dir
-/Users/jma/dev/OculusRiftDK1/build/CMakeFiles/dk1_dump.dir
-/Users/jma/dev/OculusRiftDK1/build/CMakeFiles/edit_cache.dir
-/Users/jma/dev/OculusRiftDK1/build/CMakeFiles/rebuild_cache.dir
