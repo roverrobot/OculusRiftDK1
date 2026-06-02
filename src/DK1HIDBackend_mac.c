@@ -276,8 +276,23 @@ static void *run_loop_thread_main(void *arg) {
     if (!impl) return NULL;
 
     // Capture the run loop this thread owns so stop() can wake us up.
+    /* The HID thread owns the run loop.  Schedule the device and register
+     * the input report callback before signalling readiness so that
+     * callers can start interacting with the device after the thread
+     * finishes initializing. */
     CFRunLoopRef rl = CFRunLoopGetCurrent();
     CFRetain(rl);
+
+    if (impl->device) {
+        IOHIDDeviceScheduleWithRunLoop(impl->device, rl, kCFRunLoopDefaultMode);
+        IOHIDDeviceRegisterInputReportCallback(
+            impl->device,
+            impl->input_report_buf,
+            DK1_INPUT_REPORT_BUF_LEN,
+            hid_input_report_callback,
+            impl
+        );
+    }
 
     pthread_mutex_lock(&impl->ready_mutex);
     impl->run_loop = rl;
@@ -342,8 +357,9 @@ static int mac_start(DK1HIDBackend *backend) {
     }
     impl->loop_thread_running = true;
 
-    // Wait for the HID thread to publish its run loop. We cannot schedule
-    // the device until that has happened, otherwise reports may be dropped.
+    // Wait for the HID thread to publish its run loop and finish
+    // scheduling/registration. The thread signals `run_loop_ready` only
+    // after it has added the device to the run loop.
     pthread_mutex_lock(&impl->ready_mutex);
     while (!impl->run_loop_ready) {
         pthread_cond_wait(&impl->ready_cond, &impl->ready_mutex);
