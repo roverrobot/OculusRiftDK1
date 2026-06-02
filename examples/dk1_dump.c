@@ -44,15 +44,18 @@ int main(int argc, char *argv[]) {
             raw_enabled = 1;
         }
     }
+    printf("Creating tracker instance...\n");
     if (dk1_tracker_create(&tracker) != DK1_OK) {
         fprintf(stderr, "Failed to create tracker\n");
         return 1;
     }
+    printf("Finding and opening backend device...\n");
     if (dk1_tracker_open(tracker) != DK1_OK) {
         fprintf(stderr, "Failed to open tracker\n");
         dk1_tracker_destroy(tracker);
         return 1;
     }
+    printf("Device opened successfully.\n");
     dk1_tracker_set_keepalive(tracker, 10000);
     dk1_tracker_set_sample_callback(tracker, on_sample, NULL);
     if (raw_enabled) {
