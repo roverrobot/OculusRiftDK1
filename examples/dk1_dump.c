@@ -11,7 +11,8 @@
 #include <stdint.h>
 
 static volatile int keep_running = 1;
-static int raw_enabled = 0;
+// By default, dump raw reports.  Users can disable with --no-raw.
+static int raw_enabled = 1;
 
 static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
     (void)ud;
@@ -42,6 +43,8 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--raw") == 0) {
             raw_enabled = 1;
+        } else if (strcmp(argv[i], "--no-raw") == 0) {
+            raw_enabled = 0;
         }
     }
     printf("Creating tracker instance...\n");
