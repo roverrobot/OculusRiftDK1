@@ -11,8 +11,10 @@
 #include <stdint.h>
 
 static volatile int keep_running = 1;
-// By default, dump raw reports.  Users can disable with --no-raw.
-static int raw_enabled = 1;
+// By default, **do not** dump raw reports.  Users can enable with
+// `--raw`.  The `--no-raw` flag keeps the old behaviour (no raw
+// dumping).  The logic that sets the flag was updated accordingly.
+static int raw_enabled = 0;
 
 static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
     (void)ud;
