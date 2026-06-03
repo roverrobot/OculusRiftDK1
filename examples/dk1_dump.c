@@ -46,6 +46,7 @@ typedef struct VectorMean {
 
 typedef struct SummaryStats {
     uint64_t report_count;
+    uint64_t parse_failure_count;
     uint64_t sample_count;
     uint64_t sample_count_hist[256];
 
@@ -184,6 +185,12 @@ static void update_summary_report(const uint8_t *data, size_t len) {
     if (len < 62 || data[0] != 1) return;
     summary_stats.report_count++;
     summary_stats.sample_count_hist[data[1]]++;
+
+    DK1Sample samples[3];
+    size_t parsed_count = 0;
+    if (dk1_parse_input_report(data, len, samples, 3, &parsed_count) != DK1_OK) {
+        summary_stats.parse_failure_count++;
+    }
 }
 
 static void update_summary_sample(const DK1Sample *sample, double host_ts) {
@@ -249,6 +256,7 @@ static void print_summary(void) {
     fprintf(out, "Summary:\n");
     fprintf(out, "  samples: %llu\n", (unsigned long long)summary_stats.sample_count);
     fprintf(out, "  reports: %llu\n", (unsigned long long)summary_stats.report_count);
+    fprintf(out, "  parse_failures: %llu\n", (unsigned long long)summary_stats.parse_failure_count);
 
     if (summary_stats.sample_count == 0) {
         fprintf(out, "  no parsed samples collected\n");
