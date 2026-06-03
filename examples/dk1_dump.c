@@ -23,10 +23,13 @@ static int summary_enabled = 0;
 static int csv_enabled = 0;
 static int stationary_enabled = 0;
 static int sample_print_enabled = 1;
+static int use_time_limit = 0;
 static const char *csv_path = NULL;
 static FILE *text_output = NULL;
 static FILE *csv_output = NULL;
+static double run_seconds = 0.0;
 static double stationary_seconds = 10.0;
+static double program_start_host_ts = 0.0;
 
 typedef struct RunningStats {
     uint64_t count;
@@ -34,24 +37,49 @@ typedef struct RunningStats {
     double m2;
 } RunningStats;
 
-typedef struct SummaryStats {
-    RunningStats accel_mag;
-    RunningStats gyro_mag;
-    uint64_t report_count;
-    uint64_t sample_count_hist[256];
-    uint64_t timestamp_gap_hist[65536];
-    uint16_t last_timestamp;
-    int have_last_timestamp;
-    double first_report_host_ts;
-    double last_summary_host_ts;
-} SummaryStats;
-
 typedef struct VectorMean {
     uint64_t count;
     double x;
     double y;
     double z;
 } VectorMean;
+
+typedef struct SummaryStats {
+    uint64_t report_count;
+    uint64_t sample_count;
+    uint64_t sample_count_hist[256];
+
+    double first_host_ts;
+    double last_host_ts;
+    int have_host_ts;
+
+    uint16_t first_device_timestamp;
+    uint16_t last_device_timestamp;
+    uint16_t previous_device_timestamp;
+    int have_device_timestamp;
+    uint64_t timestamp_gap_count;
+    uint64_t timestamp_gap_sum;
+    uint16_t timestamp_gap_min;
+    uint16_t timestamp_gap_max;
+
+    VectorMean accel;
+    RunningStats accel_mag;
+    double accel_mag_min;
+    double accel_mag_max;
+    int have_accel_mag;
+
+    VectorMean gyro;
+    RunningStats gyro_mag;
+    double gyro_mag_min;
+    double gyro_mag_max;
+    int have_gyro_mag;
+
+    VectorMean mag;
+    double temp_sum;
+    double temp_min;
+    double temp_max;
+    int have_temp;
+} SummaryStats;
 
 typedef struct StationaryStats {
     VectorMean accel;
@@ -136,67 +164,147 @@ static void print_histogram_u64(const uint64_t *hist, size_t len) {
     }
 }
 
-static void print_summary(double host_ts) {
-    FILE *out = text_stream();
-    double elapsed = host_ts - summary_stats.first_report_host_ts;
-    double report_rate = 0.0;
-    if (summary_stats.report_count > 1 && elapsed > 0.0) {
-        report_rate = (double)(summary_stats.report_count - 1) / elapsed;
-    }
-
-    fprintf(out,
-            "summary reports=%llu rate=%.2fHz "
-            "accel_mag(mean=%.4f std=%.4f n=%llu) "
-            "gyro_mag(mean=%.6f std=%.6f n=%llu)\n",
-            (unsigned long long)summary_stats.report_count,
-            report_rate,
-            summary_stats.accel_mag.mean,
-            stats_stddev(&summary_stats.accel_mag),
-            (unsigned long long)summary_stats.accel_mag.count,
-            summary_stats.gyro_mag.mean,
-            stats_stddev(&summary_stats.gyro_mag),
-            (unsigned long long)summary_stats.gyro_mag.count);
-    fprintf(out, "  sample-count: ");
-    print_histogram_u64(summary_stats.sample_count_hist, 256);
-    fprintf(out, "\n");
-    fprintf(out, "  timestamp-gap: ");
-    print_histogram_u64(summary_stats.timestamp_gap_hist, 65536);
-    fprintf(out, "\n");
+static double relative_host_time(double host_ts) {
+    if (program_start_host_ts <= 0.0) return 0.0;
+    return host_ts - program_start_host_ts;
 }
 
-static void update_summary(const uint8_t *data, size_t len, double host_ts) {
+static void update_double_minmax(double value, double *min_value, double *max_value, int *have_value) {
+    if (!*have_value) {
+        *min_value = value;
+        *max_value = value;
+        *have_value = 1;
+        return;
+    }
+    if (value < *min_value) *min_value = value;
+    if (value > *max_value) *max_value = value;
+}
+
+static void update_summary_report(const uint8_t *data, size_t len) {
     if (len < 62 || data[0] != 1) return;
-
-    uint8_t sample_count = data[1];
-    uint16_t timestamp = read_u16_le(data + 2);
-
     summary_stats.report_count++;
-    summary_stats.sample_count_hist[sample_count]++;
-    if (summary_stats.first_report_host_ts == 0.0) {
-        summary_stats.first_report_host_ts = host_ts;
-        summary_stats.last_summary_host_ts = host_ts;
-    }
+    summary_stats.sample_count_hist[data[1]]++;
+}
 
-    if (summary_stats.have_last_timestamp) {
-        uint16_t gap = (uint16_t)(timestamp - summary_stats.last_timestamp);
-        summary_stats.timestamp_gap_hist[gap]++;
-    }
-    summary_stats.last_timestamp = timestamp;
-    summary_stats.have_last_timestamp = 1;
+static void update_summary_sample(const DK1Sample *sample, double host_ts) {
+    if (!sample) return;
 
-    DK1Sample samples[3];
-    size_t parsed_count = 0;
-    if (dk1_parse_input_report(data, len, samples, 3, &parsed_count) == DK1_OK) {
-        for (size_t i = 0; i < parsed_count; ++i) {
-            stats_update(&summary_stats.accel_mag, vec3_mag(samples[i].accel));
-            stats_update(&summary_stats.gyro_mag, vec3_mag(samples[i].gyro));
+    if (!summary_stats.have_host_ts) {
+        summary_stats.first_host_ts = host_ts;
+        summary_stats.have_host_ts = 1;
+    }
+    summary_stats.last_host_ts = host_ts;
+
+    if (!summary_stats.have_device_timestamp) {
+        summary_stats.first_device_timestamp = sample->timestamp;
+        summary_stats.previous_device_timestamp = sample->timestamp;
+        summary_stats.have_device_timestamp = 1;
+    } else if (sample->timestamp != summary_stats.previous_device_timestamp) {
+        uint16_t gap = (uint16_t)(sample->timestamp - summary_stats.previous_device_timestamp);
+        summary_stats.timestamp_gap_sum += gap;
+        if (summary_stats.timestamp_gap_count == 0 || gap < summary_stats.timestamp_gap_min) {
+            summary_stats.timestamp_gap_min = gap;
         }
+        if (summary_stats.timestamp_gap_count == 0 || gap > summary_stats.timestamp_gap_max) {
+            summary_stats.timestamp_gap_max = gap;
+        }
+        summary_stats.timestamp_gap_count++;
+        summary_stats.previous_device_timestamp = sample->timestamp;
+    }
+    summary_stats.last_device_timestamp = sample->timestamp;
+
+    summary_stats.sample_count++;
+    vector_mean_update(&summary_stats.accel, sample->accel);
+    vector_mean_update(&summary_stats.gyro, sample->gyro);
+    vector_mean_update(&summary_stats.mag, sample->mag);
+
+    double accel_mag = vec3_mag(sample->accel);
+    double gyro_mag = vec3_mag(sample->gyro);
+    stats_update(&summary_stats.accel_mag, accel_mag);
+    stats_update(&summary_stats.gyro_mag, gyro_mag);
+    update_double_minmax(
+        accel_mag,
+        &summary_stats.accel_mag_min,
+        &summary_stats.accel_mag_max,
+        &summary_stats.have_accel_mag
+    );
+    update_double_minmax(
+        gyro_mag,
+        &summary_stats.gyro_mag_min,
+        &summary_stats.gyro_mag_max,
+        &summary_stats.have_gyro_mag
+    );
+
+    summary_stats.temp_sum += sample->temperature_c;
+    update_double_minmax(
+        sample->temperature_c,
+        &summary_stats.temp_min,
+        &summary_stats.temp_max,
+        &summary_stats.have_temp
+    );
+}
+
+static void print_summary(void) {
+    FILE *out = text_stream();
+    fprintf(out, "Summary:\n");
+    fprintf(out, "  samples: %llu\n", (unsigned long long)summary_stats.sample_count);
+    fprintf(out, "  reports: %llu\n", (unsigned long long)summary_stats.report_count);
+
+    if (summary_stats.sample_count == 0) {
+        fprintf(out, "  no parsed samples collected\n");
+        return;
     }
 
-    if (host_ts - summary_stats.last_summary_host_ts >= 1.0) {
-        print_summary(host_ts);
-        summary_stats.last_summary_host_ts = host_ts;
+    double elapsed = summary_stats.last_host_ts - summary_stats.first_host_ts;
+    double sample_rate = elapsed > 0.0 ? (double)summary_stats.sample_count / elapsed : 0.0;
+    fprintf(out, "  elapsed_host_s: %.6f\n", elapsed);
+    fprintf(out, "  host_time_first_s: %.6f\n", relative_host_time(summary_stats.first_host_ts));
+    fprintf(out, "  host_time_last_s: %.6f\n", relative_host_time(summary_stats.last_host_ts));
+    fprintf(out, "  sample_rate_hz: %.3f\n", sample_rate);
+    fprintf(out, "  device_ts_first: %u\n", summary_stats.first_device_timestamp);
+    fprintf(out, "  device_ts_last: %u\n", summary_stats.last_device_timestamp);
+
+    fprintf(out, "  accel_mean: %.9f %.9f %.9f\n",
+            summary_stats.accel.x,
+            summary_stats.accel.y,
+            summary_stats.accel.z);
+    fprintf(out, "  accel_mag_mean: %.9f\n", summary_stats.accel_mag.mean);
+    fprintf(out, "  accel_mag_std: %.9f\n", stats_stddev(&summary_stats.accel_mag));
+    fprintf(out, "  accel_mag_min/max: %.9f %.9f\n",
+            summary_stats.accel_mag_min,
+            summary_stats.accel_mag_max);
+
+    fprintf(out, "  gyro_mean: %.9f %.9f %.9f\n",
+            summary_stats.gyro.x,
+            summary_stats.gyro.y,
+            summary_stats.gyro.z);
+    fprintf(out, "  gyro_mag_mean: %.9f\n", summary_stats.gyro_mag.mean);
+    fprintf(out, "  gyro_mag_std: %.9f\n", stats_stddev(&summary_stats.gyro_mag));
+    fprintf(out, "  gyro_mag_min/max: %.9f %.9f\n",
+            summary_stats.gyro_mag_min,
+            summary_stats.gyro_mag_max);
+
+    fprintf(out, "  mag_mean: %.9f %.9f %.9f\n",
+            summary_stats.mag.x,
+            summary_stats.mag.y,
+            summary_stats.mag.z);
+    fprintf(out, "  temp_mean/min/max: %.6f %.6f %.6f\n",
+            summary_stats.temp_sum / (double)summary_stats.sample_count,
+            summary_stats.temp_min,
+            summary_stats.temp_max);
+
+    if (summary_stats.timestamp_gap_count > 0) {
+        fprintf(out, "  timestamp_gap_mean/min/max/count: %.3f %u %u %llu\n",
+                (double)summary_stats.timestamp_gap_sum / (double)summary_stats.timestamp_gap_count,
+                summary_stats.timestamp_gap_min,
+                summary_stats.timestamp_gap_max,
+                (unsigned long long)summary_stats.timestamp_gap_count);
+    } else {
+        fprintf(out, "  timestamp_gap_mean/min/max/count: unavailable\n");
     }
+    fprintf(out, "  sample-count-field: ");
+    print_histogram_u64(summary_stats.sample_count_hist, 256);
+    fprintf(out, "\n");
 }
 
 static void print_stationary_estimate(void) {
@@ -331,9 +439,9 @@ static void write_csv_report(const uint8_t *data, size_t len, double host_ts) {
     for (size_t i = 0; i < parsed_count; ++i) {
         const DK1Sample *s = &samples[i];
         fprintf(csv_output,
-                "%u,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n",
+                "%.9f,%u,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n",
+                relative_host_time(host_ts),
                 s->timestamp,
-                host_ts,
                 s->accel.x, s->accel.y, s->accel.z,
                 s->gyro.x, s->gyro.y, s->gyro.z,
                 s->mag.x, s->mag.y, s->mag.z,
@@ -372,7 +480,7 @@ static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
     }
 
     if (summary_enabled) {
-        update_summary(data, len, host_ts);
+        update_summary_report(data, len);
     }
 
     if (csv_enabled) {
@@ -390,6 +498,9 @@ static void handle_sigint(int sig) {
 
 static void on_sample(const DK1Sample *sample, void *user_data) {
     (void)user_data;
+    if (summary_enabled) {
+        update_summary_sample(sample, monotonic_seconds());
+    }
     if (!sample_print_enabled) return;
     fprintf(text_stream(), "S: %u | Acc: %.2f %.2f %.2f | Gyro: %.2f %.2f %.2f | Mag: %.2f %.2f %.2f | Temp: %.2f C\n",
             sample->timestamp,
@@ -408,6 +519,22 @@ static int parse_positive_double(const char *text, double *out_value) {
     }
     *out_value = value;
     return 1;
+}
+
+static void print_usage(FILE *out, const char *argv0) {
+    fprintf(out, "Usage: %s [options]\n", argv0);
+    fprintf(out, "Options:\n");
+    fprintf(out, "  --raw                 Print raw normalized HID reports.\n");
+    fprintf(out, "  --no-raw              Disable raw HID report printing.\n");
+    fprintf(out, "  --decode-blocks       Print raw 16-byte motion block diagnostics.\n");
+    fprintf(out, "  --summary             Print end-of-run sample summary statistics.\n");
+    fprintf(out, "  --csv [PATH|-]        Write CSV samples to stdout, '-' or PATH.\n");
+    fprintf(out, "  --csv=PATH            Write CSV samples to PATH.\n");
+    fprintf(out, "  --stationary [SEC]    Estimate stationary bias/means, default 10 sec.\n");
+    fprintf(out, "  --stationary=SEC      Estimate stationary bias/means for SEC seconds.\n");
+    fprintf(out, "  --time SECONDS        Run for a fixed positive duration.\n");
+    fprintf(out, "  --time=SECONDS        Run for a fixed positive duration.\n");
+    fprintf(out, "  --help                Show this help.\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -436,6 +563,7 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 if (!parse_positive_double(argv[++i], &stationary_seconds)) {
                     fprintf(stderr, "Invalid --stationary seconds value\n");
+                    print_usage(stderr, argv[0]);
                     return 1;
                 }
             }
@@ -443,8 +571,30 @@ int main(int argc, char *argv[]) {
             stationary_enabled = 1;
             if (!parse_positive_double(argv[i] + 13, &stationary_seconds)) {
                 fprintf(stderr, "Invalid --stationary seconds value\n");
+                print_usage(stderr, argv[0]);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--time") == 0) {
+            if (i + 1 >= argc || !parse_positive_double(argv[++i], &run_seconds)) {
+                fprintf(stderr, "Invalid or missing --time seconds value\n");
+                print_usage(stderr, argv[0]);
+                return 1;
+            }
+            use_time_limit = 1;
+        } else if (strncmp(argv[i], "--time=", 7) == 0) {
+            if (!parse_positive_double(argv[i] + 7, &run_seconds)) {
+                fprintf(stderr, "Invalid --time seconds value\n");
+                print_usage(stderr, argv[0]);
+                return 1;
+            }
+            use_time_limit = 1;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(stdout, argv[0]);
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown option: %s\n", argv[i]);
+            print_usage(stderr, argv[0]);
+            return 1;
         }
     }
     if (decode_blocks_enabled) {
@@ -466,8 +616,12 @@ int main(int argc, char *argv[]) {
             csv_output = stdout;
             text_output = stderr;
         }
+        if (raw_enabled) {
+            fprintf(stderr, "Warning: --raw with --csv sends raw/status output to stderr.\n");
+            text_output = stderr;
+        }
         fprintf(csv_output,
-                "timestamp,host_time,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,temp_c\n");
+                "host_time,device_timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,temp_c\n");
     } else {
         text_output = stdout;
     }
@@ -491,6 +645,7 @@ int main(int argc, char *argv[]) {
     if (raw_enabled || decode_blocks_enabled || summary_enabled || csv_enabled || stationary_enabled) {
         dk1_tracker_set_raw_report_callback(tracker, raw_print_cb, NULL);
     }
+    program_start_host_ts = monotonic_seconds();
     if (dk1_tracker_start(tracker) != DK1_OK) {
         fprintf(stderr, "Failed to start tracker\n");
         dk1_tracker_close(tracker);
@@ -504,12 +659,15 @@ int main(int argc, char *argv[]) {
         fprintf(text_stream(), "Tracking started. Press Ctrl-C to stop.\n");
     }
     while (keep_running) {
-        usleep(100000);
+        if (use_time_limit && monotonic_seconds() - program_start_host_ts >= run_seconds) {
+            break;
+        }
+        usleep(10000);
     }
     fprintf(text_stream(), "\nStopping...\n");
     dk1_tracker_stop(tracker);
-    if (summary_enabled && summary_stats.report_count > 0) {
-        print_summary(monotonic_seconds());
+    if (summary_enabled) {
+        print_summary();
     }
     if (stationary_enabled) {
         print_stationary_estimate();
