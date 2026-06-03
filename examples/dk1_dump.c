@@ -21,10 +21,12 @@ static int raw_enabled = 0;
 static int decode_blocks_enabled = 0;
 static int summary_enabled = 0;
 static int csv_enabled = 0;
+static int stationary_enabled = 0;
 static int sample_print_enabled = 1;
 static const char *csv_path = NULL;
 static FILE *text_output = NULL;
 static FILE *csv_output = NULL;
+static double stationary_seconds = 10.0;
 
 typedef struct RunningStats {
     uint64_t count;
@@ -44,7 +46,26 @@ typedef struct SummaryStats {
     double last_summary_host_ts;
 } SummaryStats;
 
+typedef struct VectorMean {
+    uint64_t count;
+    double x;
+    double y;
+    double z;
+} VectorMean;
+
+typedef struct StationaryStats {
+    VectorMean accel;
+    VectorMean gyro;
+    uint64_t report_count;
+    double start_host_ts;
+    double last_host_ts;
+    double temp_min;
+    double temp_max;
+    int have_temp;
+} StationaryStats;
+
 static SummaryStats summary_stats;
+static StationaryStats stationary_stats;
 
 static FILE *text_stream(void) {
     return text_output ? text_output : stdout;
@@ -88,6 +109,18 @@ static double stats_stddev(const RunningStats *stats) {
 
 static double vec3_mag(DK1Vector3 v) {
     return sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+static void vector_mean_update(VectorMean *mean, DK1Vector3 v) {
+    mean->count++;
+    double n = (double)mean->count;
+    mean->x += (v.x - mean->x) / n;
+    mean->y += (v.y - mean->y) / n;
+    mean->z += (v.z - mean->z) / n;
+}
+
+static double vector_mean_mag(const VectorMean *mean) {
+    return sqrt(mean->x * mean->x + mean->y * mean->y + mean->z * mean->z);
 }
 
 static void print_histogram_u64(const uint64_t *hist, size_t len) {
@@ -163,6 +196,82 @@ static void update_summary(const uint8_t *data, size_t len, double host_ts) {
     if (host_ts - summary_stats.last_summary_host_ts >= 1.0) {
         print_summary(host_ts);
         summary_stats.last_summary_host_ts = host_ts;
+    }
+}
+
+static void print_stationary_estimate(void) {
+    FILE *out = text_stream();
+    double elapsed = 0.0;
+    if (stationary_stats.start_host_ts > 0.0) {
+        elapsed = stationary_stats.last_host_ts - stationary_stats.start_host_ts;
+    }
+
+    fprintf(out, "stationary seconds=%.3f elapsed=%.3f reports=%llu samples=%llu\n",
+            stationary_seconds,
+            elapsed,
+            (unsigned long long)stationary_stats.report_count,
+            (unsigned long long)stationary_stats.gyro.count);
+
+    if (stationary_stats.gyro.count > 0) {
+        fprintf(out,
+                "  gyro zero-rate bias: (%.9f, %.9f, %.9f) magnitude=%.9f\n",
+                stationary_stats.gyro.x,
+                stationary_stats.gyro.y,
+                stationary_stats.gyro.z,
+                vector_mean_mag(&stationary_stats.gyro));
+        fprintf(out,
+                "  accel mean: (%.9f, %.9f, %.9f) magnitude=%.9f\n",
+                stationary_stats.accel.x,
+                stationary_stats.accel.y,
+                stationary_stats.accel.z,
+                vector_mean_mag(&stationary_stats.accel));
+    } else {
+        fprintf(out, "  gyro zero-rate bias: unavailable\n");
+        fprintf(out, "  accel mean: unavailable\n");
+    }
+
+    if (stationary_stats.have_temp) {
+        fprintf(out, "  temperature range: %.2f..%.2f C\n",
+                stationary_stats.temp_min,
+                stationary_stats.temp_max);
+    } else {
+        fprintf(out, "  temperature range: unavailable\n");
+    }
+}
+
+static void update_stationary(const uint8_t *data, size_t len, double host_ts) {
+    if (len < 62 || data[0] != 1) return;
+
+    if (stationary_stats.report_count == 0) {
+        stationary_stats.start_host_ts = host_ts;
+    }
+    stationary_stats.last_host_ts = host_ts;
+    stationary_stats.report_count++;
+
+    DK1Sample samples[3];
+    size_t parsed_count = 0;
+    if (dk1_parse_input_report(data, len, samples, 3, &parsed_count) == DK1_OK) {
+        for (size_t i = 0; i < parsed_count; ++i) {
+            const DK1Sample *s = &samples[i];
+            vector_mean_update(&stationary_stats.accel, s->accel);
+            vector_mean_update(&stationary_stats.gyro, s->gyro);
+            if (!stationary_stats.have_temp) {
+                stationary_stats.temp_min = s->temperature_c;
+                stationary_stats.temp_max = s->temperature_c;
+                stationary_stats.have_temp = 1;
+            } else {
+                if (s->temperature_c < stationary_stats.temp_min) {
+                    stationary_stats.temp_min = s->temperature_c;
+                }
+                if (s->temperature_c > stationary_stats.temp_max) {
+                    stationary_stats.temp_max = s->temperature_c;
+                }
+            }
+        }
+    }
+
+    if (host_ts - stationary_stats.start_host_ts >= stationary_seconds) {
+        keep_running = 0;
     }
 }
 
@@ -269,6 +378,10 @@ static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
     if (csv_enabled) {
         write_csv_report(data, len, host_ts);
     }
+
+    if (stationary_enabled) {
+        update_stationary(data, len, host_ts);
+    }
 }
 
 static void handle_sigint(int sig) {
@@ -284,6 +397,17 @@ static void on_sample(const DK1Sample *sample, void *user_data) {
             sample->gyro.x, sample->gyro.y, sample->gyro.z,
             sample->mag.x, sample->mag.y, sample->mag.z,
             sample->temperature_c);
+}
+
+static int parse_positive_double(const char *text, double *out_value) {
+    if (!text) return 0;
+    char *end = NULL;
+    double value = strtod(text, &end);
+    if (text == end || *end != '\0' || value <= 0.0) {
+        return 0;
+    }
+    *out_value = value;
+    return 1;
 }
 
 int main(int argc, char *argv[]) {
@@ -307,12 +431,26 @@ int main(int argc, char *argv[]) {
         } else if (strncmp(argv[i], "--csv=", 6) == 0) {
             csv_enabled = 1;
             csv_path = argv[i] + 6;
+        } else if (strcmp(argv[i], "--stationary") == 0) {
+            stationary_enabled = 1;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                if (!parse_positive_double(argv[++i], &stationary_seconds)) {
+                    fprintf(stderr, "Invalid --stationary seconds value\n");
+                    return 1;
+                }
+            }
+        } else if (strncmp(argv[i], "--stationary=", 13) == 0) {
+            stationary_enabled = 1;
+            if (!parse_positive_double(argv[i] + 13, &stationary_seconds)) {
+                fprintf(stderr, "Invalid --stationary seconds value\n");
+                return 1;
+            }
         }
     }
     if (decode_blocks_enabled) {
         raw_enabled = 1;
     }
-    if (summary_enabled || csv_enabled) {
+    if (summary_enabled || csv_enabled || stationary_enabled) {
         sample_print_enabled = 0;
     }
 
@@ -350,7 +488,7 @@ int main(int argc, char *argv[]) {
     fprintf(text_stream(), "Device opened successfully.\n");
     dk1_tracker_set_keepalive(tracker, 10000);
     dk1_tracker_set_sample_callback(tracker, on_sample, NULL);
-    if (raw_enabled || decode_blocks_enabled || summary_enabled || csv_enabled) {
+    if (raw_enabled || decode_blocks_enabled || summary_enabled || csv_enabled || stationary_enabled) {
         dk1_tracker_set_raw_report_callback(tracker, raw_print_cb, NULL);
     }
     if (dk1_tracker_start(tracker) != DK1_OK) {
@@ -360,7 +498,11 @@ int main(int argc, char *argv[]) {
         if (csv_output && csv_output != stdout) fclose(csv_output);
         return 1;
     }
-    fprintf(text_stream(), "Tracking started. Press Ctrl-C to stop.\n");
+    if (stationary_enabled) {
+        fprintf(text_stream(), "Stationary collection started for %.3f seconds.\n", stationary_seconds);
+    } else {
+        fprintf(text_stream(), "Tracking started. Press Ctrl-C to stop.\n");
+    }
     while (keep_running) {
         usleep(100000);
     }
@@ -368,6 +510,9 @@ int main(int argc, char *argv[]) {
     dk1_tracker_stop(tracker);
     if (summary_enabled && summary_stats.report_count > 0) {
         print_summary(monotonic_seconds());
+    }
+    if (stationary_enabled) {
+        print_stationary_estimate();
     }
     dk1_tracker_close(tracker);
     dk1_tracker_destroy(tracker);
