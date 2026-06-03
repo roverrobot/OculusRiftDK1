@@ -1,4 +1,4 @@
-# Oculus Rift DK1 Head/Neck Tracking Model, Revised
+# Oculus Rift DK1 Head/Neck Tracking Model, Revised with Eye Direction
 
 ## Purpose
 
@@ -8,19 +8,21 @@ This note summarizes a user-space tracking model for the Oculus Rift DK1 headset
 - angular velocity and angular acceleration,
 - approximate linear acceleration,
 - plausible eye positions from a head/neck kinematic model,
+- the world-space looking direction,
 - gyro drift using slower accelerometer/magnetometer correction.
 
 The DK1 tracker provides synchronized gyro and accelerometer samples, plus lower-rate magnetometer readings. This makes it feasible to build a CPU-side estimator with a fast inertial layer and a slower correction layer.
 
-The main revision from the earlier model is that the head is no longer represented only by a single neck-to-tracker vector. We now distinguish:
+The main revision from the earlier model is that the head is not represented only by a single neck-to-tracker vector. We distinguish:
 
 - the effective neck pivot,
 - the center of the head,
 - the center of the eyes,
 - the left and right eye positions,
-- the tracker/IMU point.
+- the tracker/IMU point,
+- the headset-frame looking direction.
 
-This distinction is useful because the accelerometer model depends on the neck-to-tracker vector, while rendering depends on the neck-to-eye vectors.
+This distinction is useful because the accelerometer model depends on the neck-to-tracker vector, while rendering depends on the neck-to-eye vectors and the looking direction.
 
 ---
 
@@ -168,12 +170,58 @@ accelerometer prediction:
     depends on r_NT, the neck-to-tracker vector
 
 rendering / eye-pose prediction:
-    depends on r_NL and r_NR, the neck-to-eye vectors
+    depends on r_NE, r_NL, r_NR, and the looking direction
 ```
 
 ---
 
-## 3. Approximate Default Geometry
+## 3. Looking Direction
+
+The second key rendering quantity, besides the eye midpoint position, is the world-space looking direction.
+
+Let
+
+```math
+d_H
+```
+
+be a unit vector in headset coordinates pointing in the intended forward-looking direction. Then the world-space looking direction is
+
+```math
+d_W(t) = R(t)d_H.
+```
+
+The default `d_H` depends on the final headset coordinate convention. It may be one of the coordinate axes, such as `(0,0,-1)` or `(0,1,0)`, but this should not be hard-coded until the tracker-to-display coordinate convention is confirmed.
+
+A more complete optical calibration could replace `d_H` with a fixed headset-to-optical-frame rotation:
+
+```math
+R_{\mathrm{HO}},
+```
+
+so that the rendered eye orientation is
+
+```math
+R_{\mathrm{eye}}(t)=R(t)R_{\mathrm{HO}}.
+```
+
+For the first implementation, using a single forward vector `d_H` is sufficient.
+
+The two key inferred/rendered quantities are therefore:
+
+```math
+p_E(t)=p_N(t)+R(t)r_{NE},
+```
+
+and
+
+```math
+d_W(t)=R(t)d_H.
+```
+
+---
+
+## 4. Approximate Default Geometry
 
 The actual values should eventually be fitted or user-configured. For a first implementation, use conservative placeholder values in meters:
 
@@ -189,14 +237,15 @@ The axis signs depend on the final headset coordinate convention. These defaults
 The important design decision is not the exact numbers, but the separation between:
 
 ```text
-r_NT  used for tracker acceleration
-r_NE  used for eye-center pseudo-position
-r_NL, r_NR used for stereo eye poses
+r_NT        used for tracker acceleration
+r_NE        used for eye-center pseudo-position
+r_NL, r_NR  used for stereo eye poses
+d_H         used for looking direction
 ```
 
 ---
 
-## 4. Angular Velocity and Angular Acceleration
+## 5. Angular Velocity and Angular Acceleration
 
 Let
 
@@ -274,7 +323,7 @@ R(t)^T a_{N,W}
 
 ---
 
-## 5. Expected Accelerometer Reading
+## 6. Expected Accelerometer Reading
 
 An accelerometer measures **specific force**, not pure physical acceleration. It measures physical acceleration minus gravity, expressed in the sensor frame.
 
@@ -376,7 +425,7 @@ is interpreted as approximate neck/body translational acceleration in headset co
 
 ---
 
-## 6. Expected Gyro Reading
+## 7. Expected Gyro Reading
 
 The ideal gyro reading is angular velocity in headset coordinates:
 
@@ -416,11 +465,11 @@ The gyro is used for short-term orientation integration:
 \end{bmatrix}.
 ```
 
-Here the quaternion is assumed to map headset-frame vectors to world-frame vectors. If the implementation uses the opposite convention, the multiplication order must be adjusted accordingly.
+Here `q` is assumed to map headset-frame vectors to world-frame vectors, and `\tilde\omega` is assumed to be expressed in the headset/body frame. If `\omega` is instead represented in world coordinates, or if the implementation uses a world-to-headset quaternion, the multiplication order and sign convention must be adjusted.
 
 ---
 
-## 7. Gyro Drift Model
+## 8. Gyro Drift Model
 
 Over a short 10–20 ms window, gyro drift can be treated as a constant vector:
 
@@ -454,7 +503,7 @@ Important identifiability point:
 
 ---
 
-## 8. Local Sliding-Window Motion Model
+## 9. Local Sliding-Window Motion Model
 
 Use a short window of `N = 10–20` synchronized gyro/accelerometer samples. At 1000 Hz, this corresponds to about 10–20 ms.
 
@@ -513,7 +562,7 @@ Then the full local count is 15. In practice, it is better to treat `b_ω` as a 
 
 ---
 
-## 9. Sliding-Window Observation Equations
+## 10. Sliding-Window Observation Equations
 
 After calibration and bias correction, the gyro model is
 
@@ -567,9 +616,9 @@ The residual after subtracting gravity and rotational acceleration is interprete
 
 ---
 
-## 10. Eye Pose Model for Rendering
+## 11. Eye Pose Model for Rendering
 
-The inertial sensor estimates orientation. The head/neck model converts this orientation into approximate eye positions.
+The inertial sensor estimates orientation. The head/neck model converts this orientation into approximate eye positions and a looking direction.
 
 Given the neck pivot world position `p_N(t)`, the left and right eye positions are
 
@@ -581,10 +630,30 @@ p_L(t) = p_N(t) + R(t)r_{NL},
 p_R(t) = p_N(t) + R(t)r_{NR}.
 ```
 
-The eye orientations are usually taken to be the same as the headset orientation:
+The eye-center position is
+
+```math
+p_E(t) = \frac12(p_L(t)+p_R(t)) = p_N(t)+R(t)r_{NE}.
+```
+
+The looking direction is
+
+```math
+d_W(t)=R(t)d_H.
+```
+
+The simplest DK1-style model takes the eye orientations to be the same as the headset orientation:
 
 ```math
 R_L(t) = R_R(t) = R(t).
+```
+
+This is an approximation. Later, a fixed display/optical alignment rotation can be added:
+
+```math
+R_L(t)=R(t)R_{HL},
+\qquad
+R_R(t)=R(t)R_{HR}.
 ```
 
 This gives a DK1-style pseudo-6DOF pose:
@@ -595,6 +664,9 @@ orientation:
 
 eye translation:
     from neck-pivot model
+
+looking direction:
+    from R(t)d_H
 
 true body translation:
     only approximate, unless external tracking is added
@@ -612,11 +684,11 @@ v_N(t)\Delta t
 \frac12 a_N(t)\Delta t^2.
 ```
 
-However, this should be treated cautiously because pure inertial position integration drifts rapidly without external reference.
+However, this should be treated cautiously because pure inertial position integration drifts rapidly without external reference. In a DK1-only implementation, `p_N(t)` should usually be fixed, externally provided, or only weakly updated, not freely integrated for long durations.
 
 ---
 
-## 11. Number of Observations in a 20-Sample Window
+## 12. Number of Observations in a 20-Sample Window
 
 Each synchronized gyro/accelerometer sample provides:
 
@@ -640,14 +712,49 @@ Compared with the 12 fast variables, or 15 variables if local gyro bias is inclu
 The additional head geometry parameters
 
 ```text
-r_NT, r_NC, r_CE, IPD
+r_NT, r_NC, r_CE, IPD, d_H
 ```
 
 should not all be estimated freely in the fast 10–20 ms window. They should be treated as fixed parameters or slowly fitted calibration parameters.
 
+A compact grouping of the model parameters is:
+
+```text
+Rendered outputs:
+    p_E(t)       eye midpoint world position
+    d_W(t)       world-space looking direction
+
+Dynamic state:
+    R(t) or q(t)
+    omega_H(t)
+    alpha_H(t)
+    p_N(t), v_N(t), a_N(t) if used
+
+Head/neck geometry:
+    r_NT
+    r_NC
+    r_CE
+    r_NE = r_NC + r_CE
+    d_IPD
+    d_H
+
+Sensor calibration:
+    C_omega, b_omega
+    C_a, b_a
+    C_m, b_m
+    optional temperature-bias relation
+
+World/environment:
+    g_W
+    m_W
+
+Fast local fit:
+    alpha_0, beta, a_0, j
+```
+
 ---
 
-## 12. Magnetometer Model
+## 13. Magnetometer Model
 
 The magnetometer is lower-rate than gyro/accelerometer and should mainly be used as a slow heading/yaw correction.
 
@@ -715,12 +822,12 @@ Slower orientation/bias estimator:
 
 Head/neck model:
     fixed or slowly fitted geometry
-    compute tracker rotational acceleration and eye poses
+    compute tracker rotational acceleration, eye poses, and looking direction
 ```
 
 ---
 
-## 13. Recommended Estimator Architecture
+## 14. Recommended Estimator Architecture
 
 ```text
 HID input thread
@@ -754,12 +861,12 @@ Slow correction layer
 Render thread, 60–120 Hz or more
     - query latest predicted pose
     - never wait for HID
-    - use orientation and left/right eye poses from the head/neck model
+    - use orientation, looking direction, and left/right eye poses from the head/neck model
 ```
 
 ---
 
-## 14. Pose Prediction
+## 15. Pose Prediction
 
 For rendering, predict pose at display time rather than simply using the latest sample.
 
@@ -779,14 +886,20 @@ The pseudo-position from the neck model is
 p_E(t) = p_N(t) + R(t)r_{NE},
 ```
 
-and the stereo eye positions are
+the stereo eye positions are
 
 ```math
 p_L(t) = p_N(t) + R(t)r_{NL},
 ```
 
 ```math
-p_R(t) = p_N(t) + R(t)r_{NR}.
+p_R(t) = p_N(t) + R(t)r_{NR},
+```
+
+and the predicted looking direction is
+
+```math
+d_W(t)=R(t)d_H.
 ```
 
 If approximate translational acceleration is retained, one can also use
@@ -805,7 +918,7 @@ But this should be treated cautiously because inertial position integration drif
 
 ---
 
-## 15. What the Model Can and Cannot Do
+## 16. What the Model Can and Cannot Do
 
 This model can provide:
 
@@ -814,6 +927,7 @@ This model can provide:
 - yaw drift correction using magnetometer when reliable,
 - approximate translational acceleration,
 - plausible eye-center and stereo-eye pseudo-positions,
+- looking direction from orientation and a headset-frame forward vector,
 - improved gravity subtraction during head rotation.
 
 This model cannot provide reliable absolute position by itself. Without external tracking, true translational position remains weakly identifiable and will drift if acceleration is integrated.
@@ -826,12 +940,13 @@ angular velocity:            reliable short term
 angular acceleration:        estimated over sliding window
 linear acceleration:         approximate residual estimate
 eye pseudo-position:         neck/head model approximation
+looking direction:           orientation-derived, with fixed headset-frame direction
 absolute position:           not reliable without external reference
 ```
 
 ---
 
-## 16. Implementation Notes
+## 17. Implementation Notes
 
 The computation is small enough for CPU execution.
 
@@ -853,8 +968,11 @@ typedef struct DK1HeadModel {
     DK1Vector3 neck_to_head_center;  // r_NC
     DK1Vector3 head_center_to_eye;   // r_CE
     double ipd_m;
+    DK1Vector3 look_dir_head;        // d_H, unit vector
 } DK1HeadModel;
 ```
+
+If the current implementation does not yet include `look_dir_head`, it can still compute eye positions. The looking direction should be added before rendering-facing pose output is finalized.
 
 This module can provide:
 
@@ -864,13 +982,14 @@ left_eye_from_neck()
 right_eye_from_neck()
 eye_positions_world()
 tracker_rotational_accel()
+looking_direction_world()
 ```
 
 The geometry parameters should be adjustable and should not be hard-coded into the estimator.
 
 ---
 
-## 17. Summary of Core Equations
+## 18. Summary of Core Equations
 
 Head/neck position model:
 
@@ -902,6 +1021,12 @@ p_L(t) = p_N(t) + R(t)r_{NL},
 
 ```math
 p_R(t) = p_N(t) + R(t)r_{NR}.
+```
+
+Looking direction:
+
+```math
+d_W(t)=R(t)d_H.
 ```
 
 Gyro model:
@@ -971,4 +1096,5 @@ Recommended practical split:
 12 fast variables
 + 3 slow gyro-bias variables
 + slowly fitted or user-configured head/neck geometry
++ headset-frame looking direction d_H
 ```
