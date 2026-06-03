@@ -28,35 +28,46 @@ static uint32_t read_bits_le(const uint8_t *p, int bit_offset, int bit_count) {
 
 // Sign‑extend a 21‑bit two’s‑complement value to 32 bits.
 static int32_t sign_extend_21(uint32_t v) {
-    if (v & (1U << 20)) {
-        return (int32_t)(v | 0xFFE00000u);
+    v &= 0x1FFFFF;
+    if (v & 0x100000) {
+        v |= 0xFFE00000u;
     }
     return (int32_t)v;
 }
 
+static void decode_vec3_21(const uint8_t *b, DK1Vector3 *out, double scale) {
+    uint32_t x =
+        ((uint32_t)b[0] << 13) |
+        ((uint32_t)b[1] << 5)  |
+        ((uint32_t)b[2] >> 3);
+
+    uint32_t y =
+        (((uint32_t)b[2] & 0x07) << 18) |
+        ((uint32_t)b[3] << 10) |
+        ((uint32_t)b[4] << 2)  |
+        ((uint32_t)b[5] >> 6);
+
+    uint32_t z =
+        (((uint32_t)b[5] & 0x3F) << 15) |
+        ((uint32_t)b[6] << 7) |
+        ((uint32_t)b[7] >> 1);
+
+    out->x = sign_extend_21(x) * scale;
+    out->y = sign_extend_21(y) * scale;
+    out->z = sign_extend_21(z) * scale;
+}
+
 // Parse a 16‑byte motion sample block containing 6 × 21‑bit values.
 // The layout is assumed to be: accel X, Y, Z followed by gyro X, Y, Z.
-static void parse_motion_sample_16bytes(const uint8_t *p, DK1Vector3 *accel, DK1Vector3 *gyro) {
-    const int offsets[6] = {0, 21, 42, 63, 84, 105};
+static void parse_motion_sample_16bytes(
+    const uint8_t *p,
+    DK1Vector3 *accel,
+    DK1Vector3 *gyro
+) {
     const double scale = 1.0 / 10000.0;
-    accel->x = accel->y = accel->z = 0.0;
-    for (int i = 0; i < 3; ++i) {
-        uint32_t raw = read_bits_le(p, offsets[i], 21);
-        switch (i) {
-        case 0: accel->x = sign_extend_21(raw) * scale; break;
-        case 1: accel->y = sign_extend_21(raw) * scale; break;
-        case 2: accel->z = sign_extend_21(raw) * scale; break;
-        }
-    }
-    gyro->x = gyro->y = gyro->z = 0.0;
-    for (int i = 0; i < 3; ++i) {
-        uint32_t raw = read_bits_le(p, offsets[3 + i], 21);
-        switch (i) {
-        case 0: gyro->x = sign_extend_21(raw) * scale; break;
-        case 1: gyro->y = sign_extend_21(raw) * scale; break;
-        case 2: gyro->z = sign_extend_21(raw) * scale; break;
-        }
-    }
+
+    decode_vec3_21(p,     accel, scale);  // bytes 0..7
+    decode_vec3_21(p + 8, gyro,  scale);  // bytes 8..15
 }
 
 int dk1_parse_input_report(
