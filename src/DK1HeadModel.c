@@ -29,11 +29,13 @@ static DK1Vector3 vec3_cross(DK1Vector3 a, DK1Vector3 b) {
 void dk1_head_model_init_default(DK1HeadModel *model) {
     if (!model) return;
 
-    /* Placeholder geometry in meters. These defaults are intentionally
-     * conservative and should be fitted or user-configured later. */
-    model->neck_to_tracker = (DK1Vector3){0.0, 0.10, 0.10};
-    model->neck_to_head_center = (DK1Vector3){0.0, 0.08, 0.08};
-    model->head_center_to_eye = (DK1Vector3){0.0, 0.02, 0.08};
+    /* Placeholder Gamma-shaped geometry in meters. With the current y-down
+     * convention, negative y is above the neck pivot and positive z is the
+     * provisional looking direction. These defaults should be fitted or
+     * user-configured later. */
+    model->neck_to_tracker = (DK1Vector3){0.0, -0.10, 0.16};
+    model->neck_to_head_center = (DK1Vector3){0.0, -0.10, 0.0};
+    model->head_center_to_eye = (DK1Vector3){0.0, 0.0, 0.16};
     model->ipd_m = 0.064;
 }
 

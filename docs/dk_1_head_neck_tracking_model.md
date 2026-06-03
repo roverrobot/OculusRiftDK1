@@ -32,11 +32,13 @@ Use the following coordinate frames:
 
 ```text
 W = world frame
-    z-axis upward
-    gravity vector g_W = (0, 0, -g), with g ≈ 9.81 m/s²
+    y-axis points downward in the current DK1/probe convention
+    gravity vector g_W = (0, g, 0), with g ≈ 9.81 m/s²
 
 H = headset/tracker frame
     axes fixed to the headset tracker
+    provisional +y points downward
+    provisional +z points in the looking direction
 
 N = effective neck pivot frame
     origin near the effective center of head rotation
@@ -191,7 +193,18 @@ be a unit vector in headset coordinates pointing in the intended forward-looking
 d_W(t) = R(t)d_H.
 ```
 
-The default `d_H` depends on the final headset coordinate convention. It may be one of the coordinate axes, such as `(0,0,-1)` or `(0,1,0)`, but this should not be hard-coded until the tracker-to-display coordinate convention is confirmed.
+The current provisional default is
+
+```math
+d_H =
+\begin{bmatrix}
+0\\
+0\\
+1
+\end{bmatrix}.
+```
+
+This matches the current probe convention where headset `+z` points out through the eye midpoint. The final tracker-to-display convention should still be confirmed before rendering-facing pose output is treated as calibrated.
 
 A more complete optical calibration could replace `d_H` with a fixed headset-to-optical-frame rotation:
 
@@ -226,13 +239,13 @@ d_W(t)=R(t)d_H.
 The actual values should eventually be fitted or user-configured. For a first implementation, use conservative placeholder values in meters:
 
 ```text
-neck_to_tracker      r_NT ≈ (0.000, 0.100, 0.100)
-neck_to_head_center  r_NC ≈ (0.000, 0.080, 0.080)
-head_center_to_eye   r_CE ≈ (0.000, 0.020, 0.080)
+neck_to_tracker      r_NT ≈ (0.000, -0.100, 0.160)
+neck_to_head_center  r_NC ≈ (0.000, -0.100, 0.000)
+head_center_to_eye   r_CE ≈ (0.000,  0.000, 0.160)
 IPD                  d_IPD ≈ 0.064
 ```
 
-The axis signs depend on the final headset coordinate convention. These defaults should therefore be treated as initial parameters, not anatomical facts.
+These defaults form a letter-Gamma-shaped placeholder model. With the y-down convention, negative `y` is above the neck pivot, and positive `z` is the provisional looking direction. The tracker/IMU is approximated as being at the eye midpoint, so the default has `r_NT ≈ r_NE`. These values should be fitted or user-configured later; they are not anatomical facts.
 
 The important design decision is not the exact numbers, but the separation between:
 
@@ -325,33 +338,33 @@ R(t)^T a_{N,W}
 
 ## 6. Expected Accelerometer Reading
 
-An accelerometer measures **specific force**, not pure physical acceleration. It measures physical acceleration minus gravity, expressed in the sensor frame.
+The DK1 dump/probe convention currently treats the calibrated accelerometer vector as gravity-like: a stationary aligned headset measures approximately `(0, +9.8, 0)`. The equations below use that DK1/probe convention, not the opposite-signed physics-specific-force convention.
 
 With gravity vector
 
 ```math
-g_W = (0,0,-g),
+g_W = (0,g,0),
 ```
 
-the ideal accelerometer reading at the tracker is
+the ideal DK1/probe accelerometer-like reading at the tracker is
 
 ```math
-f_H
+a_{H,\mathrm{dk1}}
 =
-R(t)^T(a_{T,W} - g_W).
+R(t)^T(a_{T,W} + g_W).
 ```
 
 Using the refined head/neck model:
 
 ```math
-f_H
+a_{H,\mathrm{dk1}}
 =
 R(t)^T a_{N,W}
 +
 \alpha_H \times r_{NT}
 +
 \omega_H \times(\omega_H \times r_{NT})
--
++
 R(t)^T g_W.
 ```
 
@@ -365,7 +378,7 @@ a_{N,H}(t)
 \alpha_H(t) \times r_{NT}
 +
 \omega_H(t) \times (\omega_H(t) \times r_{NT})
--
++
 R(t)^T g_W
 +
 \epsilon_a(t).
@@ -383,7 +396,7 @@ a_{N,H}(t)
 \alpha_H(t) \times r_{NT}
 +
 \omega_H(t) \times (\omega_H(t) \times r_{NT})
--
++
 R(t)^T g_W
 \right]
 +
@@ -416,7 +429,7 @@ The residual
 \alpha_H(t) \times r_{NT}
 +
 \omega_H(t) \times(\omega_H(t)\times r_{NT})
--
++
 R(t)^T g_W
 \right]
 ```
@@ -588,7 +601,7 @@ a_0+j\tau
 (\alpha_0+\beta\tau)\times r_{NT}
 +
 \omega(\tau)\times(\omega(\tau)\times r_{NT})
--
++
 R(\tau)^Tg_W
 +
 \epsilon_a.
@@ -1047,7 +1060,7 @@ R(t)^T a_{N,W}(t)
 \alpha_H(t)\times r_{NT}
 +
 \omega_H(t)\times(\omega_H(t)\times r_{NT})
--
++
 R(t)^T g_W
 \right]
 +
