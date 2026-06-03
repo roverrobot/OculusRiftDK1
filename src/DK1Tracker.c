@@ -89,6 +89,7 @@ int dk1_tracker_is_open(const DK1Tracker *tracker) {
 
 int dk1_tracker_start(DK1Tracker *tracker) {
     if (!tracker || !tracker->is_open) return DK1_ERROR_NOT_OPEN;
+    if (tracker->is_started) return DK1_OK;
     int res = tracker->backend.start(&tracker->backend);
     if (res == DK1_OK) tracker->is_started = 1;
     return res;

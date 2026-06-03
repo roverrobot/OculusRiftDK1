@@ -11,6 +11,17 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
+
+#ifndef DK1_HID_DEBUG
+#define DK1_HID_DEBUG 0
+#endif
+
+#if DK1_HID_DEBUG
+#define DK1_HID_DEBUG_LOG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define DK1_HID_DEBUG_LOG(...) ((void)0)
+#endif
 
 // Per the DK1 tracker firmware specification, input Report ID 1 is 62 bytes.
 // We pre-allocate a 64-byte input report buffer so the IOHID callback can
@@ -39,6 +50,9 @@ typedef struct {
     uint8_t        *input_report_buf;
     // Temporary buffer for constructing a normalized 62‑byte report.
     uint8_t         normalized_report_buf[DK1_INPUT_REPORT_BUF_LEN];
+#if DK1_HID_DEBUG
+    uint64_t        input_callback_count;
+#endif
 } MacHIDImpl;
 
 // Forward declarations.
@@ -146,7 +160,7 @@ static int mac_open(DK1HIDBackend *backend, uint16_t vid, uint16_t pid) {
     }
 
     CFIndex count = CFSetGetCount(device_set);
-    fprintf(stderr, "[DEBUG] Found %lld device(s) matching VID/PID\n", (long long)count);
+    DK1_HID_DEBUG_LOG("[DK1_HID_DEBUG] Found %lld device(s) matching VID/PID\n", (long long)count);
     if (count > 0) {
         CFTypeRef *items = malloc(count * sizeof(CFTypeRef));
         CFSetGetValues(device_set, items);
@@ -157,7 +171,8 @@ static int mac_open(DK1HIDBackend *backend, uint16_t vid, uint16_t pid) {
             int vid=0, pid=0;
             if (v) CFNumberGetValue(v, kCFNumberIntType, &vid);
             if (p) CFNumberGetValue(p, kCFNumberIntType, &pid);
-            fprintf(stderr, "  device %lld: VID=%04X PID=%04X\n", (long long)i, vid, pid);
+            DK1_HID_DEBUG_LOG("[DK1_HID_DEBUG]   device %lld: VID=%04X PID=%04X\n",
+                              (long long)i, vid, pid);
         }
         free(items);
     }
@@ -204,7 +219,7 @@ static int mac_open(DK1HIDBackend *backend, uint16_t vid, uint16_t pid) {
     // Open the device so we can exchange feature and input reports.
     rc = IOHIDDeviceOpen(impl->device, kIOHIDOptionsTypeNone);
     if (rc != kIOReturnSuccess) {
-        fprintf(stderr, "[DEBUG] IOHIDDeviceOpen failed: 0x%08X\n", (unsigned)rc);
+        DK1_HID_DEBUG_LOG("[DK1_HID_DEBUG] IOHIDDeviceOpen failed: 0x%08X\n", (unsigned)rc);
         CFRelease(impl->device);
         impl->device = NULL;
         IOHIDManagerClose(impl->manager, kIOHIDOptionsTypeNone);
@@ -215,7 +230,7 @@ static int mac_open(DK1HIDBackend *backend, uint16_t vid, uint16_t pid) {
         free(impl);
         return DK1_ERROR_OPEN_FAILED;
     }
-    fprintf(stderr, "[DEBUG] IOHIDDeviceOpen succeeded, device opened.\n");
+    DK1_HID_DEBUG_LOG("[DK1_HID_DEBUG] IOHIDDeviceOpen succeeded, device opened.\n");
     impl->device_opened = true;
 
     backend->impl = impl;
@@ -239,6 +254,7 @@ static void mac_close(DK1HIDBackend *backend) {
         CFRelease(impl->run_loop);
         impl->run_loop = NULL;
     }
+    impl->run_loop_ready = false;
 
     if (impl->device) {
         if (impl->device_opened) {
@@ -284,7 +300,9 @@ static void *run_loop_thread_main(void *arg) {
     CFRetain(rl);
 
     if (impl->device) {
+        DK1_HID_DEBUG_LOG("[DK1_HID_DEBUG] scheduling device on HID run loop\n");
         IOHIDDeviceScheduleWithRunLoop(impl->device, rl, kCFRunLoopDefaultMode);
+        DK1_HID_DEBUG_LOG("[DK1_HID_DEBUG] registering input report callback\n");
         IOHIDDeviceRegisterInputReportCallback(
             impl->device,
             impl->input_report_buf,
@@ -310,34 +328,10 @@ static void *run_loop_thread_main(void *arg) {
             impl->device, impl->input_report_buf, DK1_INPUT_REPORT_BUF_LEN,
             NULL, impl
         );
+        DK1_HID_DEBUG_LOG("[DK1_HID_DEBUG] unregistered input report callback\n");
     }
 
-    // Drop our own reference; close() will release the impl's reference.
-    CFRelease(rl);
     return NULL;
-}
-
-static void hid_input_report_callback_normalized(
-      void *context, IOReturn result, void *sender, IOHIDReportType type,
-      uint32_t reportID, uint8_t *report, CFIndex reportLength)
-{
-    (void)result; (void)sender; (void)type;
-    MacHIDImpl *impl = (MacHIDImpl *)context;
-    if (!impl || !impl->report_cb) return;
-
-    const uint8_t *data = report;
-    size_t data_len = (size_t)reportLength;
-    if (reportLength == 61 && reportID == 1) {
-        impl->input_report_buf[0] = 1;
-        memcpy(impl->input_report_buf + 1, report, 61);
-        data = impl->input_report_buf;
-        data_len = 62;
-    } else if (reportLength >= 62 && report[0] == 1) {
-        // already normalized
-    } else {
-        // forward as-is
-    }
-    impl->report_cb(data, data_len, impl->user_data);
 }
 
 static int mac_start(DK1HIDBackend *backend) {
@@ -366,18 +360,6 @@ static int mac_start(DK1HIDBackend *backend) {
     }
     pthread_mutex_unlock(&impl->ready_mutex);
 
-    // Schedule the device on the HID thread's run loop and register the
-    // input report callback. The callback uses impl->input_report_buf,
-    // which is owned by the impl and must outlive the run loop.
-    IOHIDDeviceScheduleWithRunLoop(impl->device, impl->run_loop, kCFRunLoopDefaultMode);
-    IOHIDDeviceRegisterInputReportCallback(
-        impl->device,
-        impl->input_report_buf,
-        DK1_INPUT_REPORT_BUF_LEN,
-        hid_input_report_callback_normalized,
-        impl
-    );
-
     return DK1_OK;
 }
 
@@ -395,6 +377,7 @@ static void mac_stop(DK1HIDBackend *backend) {
         CFRelease(impl->run_loop);
         impl->run_loop = NULL;
     }
+    impl->run_loop_ready = false;
 }
 
 static int mac_get_feature_report(
@@ -470,8 +453,7 @@ static void mac_set_raw_report_callback(
 }
 
 // IOHID input report callback. Runs on the HID thread's run loop. Keep it
-// minimal: just hand the buffer to the registered callback. No allocation,
-// no I/O, no logging.
+// minimal: normalize the report and hand it to the registered callback.
 static void hid_input_report_callback(
          void *context,
          IOReturn result,
@@ -489,12 +471,32 @@ static void hid_input_report_callback(
     MacHIDImpl *impl = (MacHIDImpl *)context;
     if (!impl || !impl->report_cb) return;
 
-    /* Forward the raw report to the registered callback. The library
-    guarantees that the callback receives a normalized 62‑byte
-    report, so no further processing is required here. */
-    // Debug: confirm callback invocation
-    fprintf(stderr, "[DEBUG] HID report received: len=%lld id=%d\n", (long long)reportLength, (int)reportID);
-    impl->report_cb(report, (size_t)reportLength, impl->user_data);
+    const uint8_t *data = report;
+    size_t data_len = (size_t)reportLength;
+    if (reportLength == 61 && reportID == 1) {
+        impl->normalized_report_buf[0] = 1;
+        memcpy(impl->normalized_report_buf + 1, report, 61);
+        data = impl->normalized_report_buf;
+        data_len = 62;
+    }
+
+#if DK1_HID_DEBUG
+    impl->input_callback_count++;
+    uint16_t timestamp = 0;
+    if (data_len >= 4 && data[0] == 1) {
+        timestamp = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
+    }
+    DK1_HID_DEBUG_LOG(
+        "[DK1_HID_DEBUG] callback=%llu reportID=%u reportLength=%lld timestamp=%u normalizedLength=%zu\n",
+        (unsigned long long)impl->input_callback_count,
+        (unsigned)reportID,
+        (long long)reportLength,
+        timestamp,
+        data_len
+    );
+#endif
+
+    impl->report_cb(data, data_len, impl->user_data);
 }
 /*
  * Factory: set up the function pointers on the DK1HIDBackend struct.
