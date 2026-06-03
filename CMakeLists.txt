@@ -19,6 +19,7 @@ set(LIB_SOURCES
     src/DK1Tracker.c
     src/DK1Parser.c
     src/DK1Estimator.c
+    src/DK1HeadModel.c
     src/DK1RingBuffer.c
     src/DK1HIDBackend_mac.c
 )
