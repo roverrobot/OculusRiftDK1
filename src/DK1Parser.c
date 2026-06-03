@@ -3,7 +3,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <assert.h>
 
 // Read an unsigned value from a little‑endian bit stream.
 // bit_offset is the offset of the least‑significant bit.
@@ -88,13 +87,6 @@ int dk1_parse_input_report(
     if (report_id != 1) return DK1_ERROR_PARSE;
 
     uint8_t sample_count = p[1];
-    /* The DK1 report contains at most three 16-byte motion sample blocks.
-     * SampleCount > 3 indicates startup backlog or host overrun.
-     * Proper handling will be implemented later if needed.
-     * For now, reject these reports rather than assigning misleading
-     * timestamps. */
-    assert(sample_count <= 3);
-    if (sample_count > 3) return DK1_ERROR_PARSE;
 
     uint16_t timestamp = read_u16_le(p + 2);
     uint16_t last_cmd = read_u16_le(p + 4);
