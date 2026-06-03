@@ -37,6 +37,16 @@ target_include_directories(DK1Tracker PUBLIC
 add_executable(dk1_dump examples/dk1_dump.c)
 target_link_libraries(dk1_dump PRIVATE DK1Tracker)
 
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(dk1_head_model_test tests/test_head_model.c)
+    target_link_libraries(dk1_head_model_test PRIVATE DK1Tracker)
+    target_include_directories(dk1_head_model_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME dk1_head_model COMMAND dk1_head_model_test)
+endif()
+
 # ---------------------------------------------------------------------------
 # Install + distribution
 # ---------------------------------------------------------------------------
