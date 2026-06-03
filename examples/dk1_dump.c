@@ -20,7 +20,11 @@ static volatile int keep_running = 1;
 static int raw_enabled = 0;
 static int decode_blocks_enabled = 0;
 static int summary_enabled = 0;
+static int csv_enabled = 0;
 static int sample_print_enabled = 1;
+static const char *csv_path = NULL;
+static FILE *text_output = NULL;
+static FILE *csv_output = NULL;
 
 typedef struct RunningStats {
     uint64_t count;
@@ -41,6 +45,10 @@ typedef struct SummaryStats {
 } SummaryStats;
 
 static SummaryStats summary_stats;
+
+static FILE *text_stream(void) {
+    return text_output ? text_output : stdout;
+}
 
 static double monotonic_seconds(void) {
     struct timespec ts;
@@ -83,41 +91,44 @@ static double vec3_mag(DK1Vector3 v) {
 }
 
 static void print_histogram_u64(const uint64_t *hist, size_t len) {
+    FILE *out = text_stream();
     int printed = 0;
     for (size_t i = 0; i < len; ++i) {
         if (hist[i] == 0) continue;
-        printf("%s%zu=%llu", printed ? " " : "", i, (unsigned long long)hist[i]);
+        fprintf(out, "%s%zu=%llu", printed ? " " : "", i, (unsigned long long)hist[i]);
         printed = 1;
     }
     if (!printed) {
-        printf("(none)");
+        fprintf(out, "(none)");
     }
 }
 
 static void print_summary(double host_ts) {
+    FILE *out = text_stream();
     double elapsed = host_ts - summary_stats.first_report_host_ts;
     double report_rate = 0.0;
     if (summary_stats.report_count > 1 && elapsed > 0.0) {
         report_rate = (double)(summary_stats.report_count - 1) / elapsed;
     }
 
-    printf("summary reports=%llu rate=%.2fHz "
-           "accel_mag(mean=%.4f std=%.4f n=%llu) "
-           "gyro_mag(mean=%.6f std=%.6f n=%llu)\n",
-           (unsigned long long)summary_stats.report_count,
-           report_rate,
-           summary_stats.accel_mag.mean,
-           stats_stddev(&summary_stats.accel_mag),
-           (unsigned long long)summary_stats.accel_mag.count,
-           summary_stats.gyro_mag.mean,
-           stats_stddev(&summary_stats.gyro_mag),
-           (unsigned long long)summary_stats.gyro_mag.count);
-    printf("  sample-count: ");
+    fprintf(out,
+            "summary reports=%llu rate=%.2fHz "
+            "accel_mag(mean=%.4f std=%.4f n=%llu) "
+            "gyro_mag(mean=%.6f std=%.6f n=%llu)\n",
+            (unsigned long long)summary_stats.report_count,
+            report_rate,
+            summary_stats.accel_mag.mean,
+            stats_stddev(&summary_stats.accel_mag),
+            (unsigned long long)summary_stats.accel_mag.count,
+            summary_stats.gyro_mag.mean,
+            stats_stddev(&summary_stats.gyro_mag),
+            (unsigned long long)summary_stats.gyro_mag.count);
+    fprintf(out, "  sample-count: ");
     print_histogram_u64(summary_stats.sample_count_hist, 256);
-    printf("\n");
-    printf("  timestamp-gap: ");
+    fprintf(out, "\n");
+    fprintf(out, "  timestamp-gap: ");
     print_histogram_u64(summary_stats.timestamp_gap_hist, 65536);
-    printf("\n");
+    fprintf(out, "\n");
 }
 
 static void update_summary(const uint8_t *data, size_t len, double host_ts) {
@@ -156,50 +167,75 @@ static void update_summary(const uint8_t *data, size_t len, double host_ts) {
 }
 
 static void print_block_bytes(const uint8_t *p) {
+    FILE *out = text_stream();
     for (size_t i = 0; i < 16; ++i) {
-        printf("%02X", p[i]);
-        if (i + 1 < 16) printf(" ");
+        fprintf(out, "%02X", p[i]);
+        if (i + 1 < 16) fprintf(out, " ");
     }
 }
 
 static void print_decode_blocks(const uint8_t *data, size_t len) {
+    FILE *out = text_stream();
     DK1Sample samples[3];
     size_t parsed_count = 0;
     int parse_status = dk1_parse_input_report(data, len, samples, 3, &parsed_count);
 
     if (len < 56) {
-        printf("decode-blocks: report too short for 16-byte motion blocks (len=%zu)\n", len);
+        fprintf(out, "decode-blocks: report too short for 16-byte motion blocks (len=%zu)\n", len);
         return;
     }
 
     for (size_t block = 0; block < 3; ++block) {
         size_t offset = 8 + block * 16;
         const uint8_t *p = data + offset;
-        printf("block%zu offset=%zu:\n", block, offset);
-        printf("  bytes:  ");
+        fprintf(out, "block%zu offset=%zu:\n", block, offset);
+        fprintf(out, "  bytes:  ");
         print_block_bytes(p);
-        printf("\n");
-        printf("  u32:    0x%08X 0x%08X 0x%08X 0x%08X\n",
-               read_u32_le(p),
-               read_u32_le(p + 4),
-               read_u32_le(p + 8),
-               read_u32_le(p + 12));
+        fprintf(out, "\n");
+        fprintf(out, "  u32:    0x%08X 0x%08X 0x%08X 0x%08X\n",
+                read_u32_le(p),
+                read_u32_le(p + 4),
+                read_u32_le(p + 8),
+                read_u32_le(p + 12));
         if (parse_status == DK1_OK && block < parsed_count) {
             const DK1Sample *s = &samples[block];
-            printf("  parsed: accel=(%.6f, %.6f, %.6f) gyro=(%.6f, %.6f, %.6f)\n",
-                   s->accel.x, s->accel.y, s->accel.z,
-                   s->gyro.x, s->gyro.y, s->gyro.z);
+            fprintf(out, "  parsed: accel=(%.6f, %.6f, %.6f) gyro=(%.6f, %.6f, %.6f)\n",
+                    s->accel.x, s->accel.y, s->accel.z,
+                    s->gyro.x, s->gyro.y, s->gyro.z);
         } else if (parse_status == DK1_OK) {
-            printf("  parsed: unavailable (parser returned %zu samples)\n", parsed_count);
+            fprintf(out, "  parsed: unavailable (parser returned %zu samples)\n", parsed_count);
         } else {
-            printf("  parsed: unavailable (parse status %d)\n", parse_status);
+            fprintf(out, "  parsed: unavailable (parse status %d)\n", parse_status);
         }
+    }
+}
+
+static void write_csv_report(const uint8_t *data, size_t len, double host_ts) {
+    if (!csv_output) return;
+
+    DK1Sample samples[3];
+    size_t parsed_count = 0;
+    if (dk1_parse_input_report(data, len, samples, 3, &parsed_count) != DK1_OK) {
+        return;
+    }
+
+    for (size_t i = 0; i < parsed_count; ++i) {
+        const DK1Sample *s = &samples[i];
+        fprintf(csv_output,
+                "%u,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f\n",
+                s->timestamp,
+                host_ts,
+                s->accel.x, s->accel.y, s->accel.z,
+                s->gyro.x, s->gyro.y, s->gyro.z,
+                s->mag.x, s->mag.y, s->mag.z,
+                s->temperature_c);
     }
 }
 
 static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
     (void)ud;
     double host_ts = monotonic_seconds();
+    FILE *out = text_stream();
     if (raw_enabled) {
         if (len >= 62 && data[0] == 1) {
             uint16_t sample_count = data[1];
@@ -210,16 +246,16 @@ static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
             int16_t magx = read_i16_le(data + 56);
             int16_t magy = read_i16_le(data + 58);
             int16_t magz = read_i16_le(data + 60);
-            printf("raw[%zu] host=%.6f id=%u count=%u ts=%u last=%u temp=%.2fC mag=(%d,%d,%d): ",
-                   len, host_ts, data[0], sample_count, timestamp, last_cmd, temp_c, magx, magy, magz);
+            fprintf(out, "raw[%zu] host=%.6f id=%u count=%u ts=%u last=%u temp=%.2fC mag=(%d,%d,%d): ",
+                    len, host_ts, data[0], sample_count, timestamp, last_cmd, temp_c, magx, magy, magz);
         } else {
-            printf("raw[%zu] host=%.6f unrecognized: ", len, host_ts);
+            fprintf(out, "raw[%zu] host=%.6f unrecognized: ", len, host_ts);
         }
         for (size_t i = 0; i < len; ++i) {
-            printf("%02X", data[i]);
-            if (i + 1 < len) printf(" ");
+            fprintf(out, "%02X", data[i]);
+            if (i + 1 < len) fprintf(out, " ");
         }
-        printf("\n");
+        fprintf(out, "\n");
     }
 
     if (decode_blocks_enabled) {
@@ -228,6 +264,10 @@ static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
 
     if (summary_enabled) {
         update_summary(data, len, host_ts);
+    }
+
+    if (csv_enabled) {
+        write_csv_report(data, len, host_ts);
     }
 }
 
@@ -238,12 +278,12 @@ static void handle_sigint(int sig) {
 static void on_sample(const DK1Sample *sample, void *user_data) {
     (void)user_data;
     if (!sample_print_enabled) return;
-    printf("S: %u | Acc: %.2f %.2f %.2f | Gyro: %.2f %.2f %.2f | Mag: %.2f %.2f %.2f | Temp: %.2f C\n",
-           sample->timestamp,
-           sample->accel.x, sample->accel.y, sample->accel.z,
-           sample->gyro.x, sample->gyro.y, sample->gyro.z,
-           sample->mag.x, sample->mag.y, sample->mag.z,
-           sample->temperature_c);
+    fprintf(text_stream(), "S: %u | Acc: %.2f %.2f %.2f | Gyro: %.2f %.2f %.2f | Mag: %.2f %.2f %.2f | Temp: %.2f C\n",
+            sample->timestamp,
+            sample->accel.x, sample->accel.y, sample->accel.z,
+            sample->gyro.x, sample->gyro.y, sample->gyro.z,
+            sample->mag.x, sample->mag.y, sample->mag.z,
+            sample->temperature_c);
 }
 
 int main(int argc, char *argv[]) {
@@ -258,47 +298,81 @@ int main(int argc, char *argv[]) {
             decode_blocks_enabled = 1;
         } else if (strcmp(argv[i], "--summary") == 0) {
             summary_enabled = 1;
+        } else if (strcmp(argv[i], "--csv") == 0) {
+            csv_enabled = 1;
+            if (i + 1 < argc &&
+                (argv[i + 1][0] != '-' || strcmp(argv[i + 1], "-") == 0)) {
+                csv_path = argv[++i];
+            }
+        } else if (strncmp(argv[i], "--csv=", 6) == 0) {
+            csv_enabled = 1;
+            csv_path = argv[i] + 6;
         }
     }
     if (decode_blocks_enabled) {
         raw_enabled = 1;
     }
-    if (summary_enabled) {
+    if (summary_enabled || csv_enabled) {
         sample_print_enabled = 0;
     }
-    printf("Creating tracker instance...\n");
+
+    if (csv_enabled) {
+        if (csv_path && strcmp(csv_path, "-") != 0) {
+            csv_output = fopen(csv_path, "w");
+            if (!csv_output) {
+                fprintf(stderr, "Failed to open CSV output: %s\n", csv_path);
+                return 1;
+            }
+            text_output = stdout;
+        } else {
+            csv_output = stdout;
+            text_output = stderr;
+        }
+        fprintf(csv_output,
+                "timestamp,host_time,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z,mag_x,mag_y,mag_z,temp_c\n");
+    } else {
+        text_output = stdout;
+    }
+
+    fprintf(text_stream(), "Creating tracker instance...\n");
     if (dk1_tracker_create(&tracker) != DK1_OK) {
         fprintf(stderr, "Failed to create tracker\n");
+        if (csv_output && csv_output != stdout) fclose(csv_output);
         return 1;
     }
-    printf("Finding and opening backend device...\n");
+    fprintf(text_stream(), "Finding and opening backend device...\n");
     if (dk1_tracker_open(tracker) != DK1_OK) {
         fprintf(stderr, "Failed to open tracker\n");
         dk1_tracker_destroy(tracker);
+        if (csv_output && csv_output != stdout) fclose(csv_output);
         return 1;
     }
-    printf("Device opened successfully.\n");
+    fprintf(text_stream(), "Device opened successfully.\n");
     dk1_tracker_set_keepalive(tracker, 10000);
     dk1_tracker_set_sample_callback(tracker, on_sample, NULL);
-    if (raw_enabled || decode_blocks_enabled || summary_enabled) {
+    if (raw_enabled || decode_blocks_enabled || summary_enabled || csv_enabled) {
         dk1_tracker_set_raw_report_callback(tracker, raw_print_cb, NULL);
     }
     if (dk1_tracker_start(tracker) != DK1_OK) {
         fprintf(stderr, "Failed to start tracker\n");
         dk1_tracker_close(tracker);
         dk1_tracker_destroy(tracker);
+        if (csv_output && csv_output != stdout) fclose(csv_output);
         return 1;
     }
-    printf("Tracking started. Press Ctrl-C to stop.\n");
+    fprintf(text_stream(), "Tracking started. Press Ctrl-C to stop.\n");
     while (keep_running) {
         usleep(100000);
     }
-    printf("\nStopping...\n");
+    fprintf(text_stream(), "\nStopping...\n");
     dk1_tracker_stop(tracker);
     if (summary_enabled && summary_stats.report_count > 0) {
         print_summary(monotonic_seconds());
     }
     dk1_tracker_close(tracker);
     dk1_tracker_destroy(tracker);
+    if (csv_output && csv_output != stdout) {
+        fclose(csv_output);
+    }
     return 0;
 }
