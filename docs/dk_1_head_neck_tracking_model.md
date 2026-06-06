@@ -32,13 +32,15 @@ Use the following coordinate frames:
 
 ```text
 W = world frame
-    y-axis points downward in the current DK1/probe convention
-    gravity vector g_W = (0, g, 0), with g ≈ 9.81 m/s²
+    +x points right
+    +y points up
+    -z points forward
+    gravity vector g_W = (0, -g, 0), with g ≈ 9.81 m/s²
 
 H = headset/tracker frame
     axes fixed to the headset tracker
-    provisional +y points downward
-    provisional +z points in the looking direction
+    provisional +y points up when the headset is level
+    provisional -z points in the looking direction
 
 N = effective neck pivot frame
     origin near the effective center of head rotation
@@ -200,11 +202,11 @@ d_H =
 \begin{bmatrix}
 0\\
 0\\
-1
+-1
 \end{bmatrix}.
 ```
 
-This matches the current probe convention where headset `+z` points out through the eye midpoint. The final tracker-to-display convention should still be confirmed before rendering-facing pose output is treated as calibrated.
+This matches the current probe convention where headset `-z` points out through the eye midpoint. The final tracker-to-display convention should still be confirmed before rendering-facing pose output is treated as calibrated.
 
 A more complete optical calibration could replace `d_H` with a fixed headset-to-optical-frame rotation:
 
@@ -239,13 +241,13 @@ d_W(t)=R(t)d_H.
 The actual values should eventually be fitted or user-configured. For a first implementation, use conservative placeholder values in meters:
 
 ```text
-neck_to_tracker      r_NT ≈ (0.000, -0.100, 0.160)
-neck_to_head_center  r_NC ≈ (0.000, -0.100, 0.000)
-head_center_to_eye   r_CE ≈ (0.000,  0.000, 0.160)
+neck_to_tracker      r_NT ≈ (0.000, 0.100, -0.160)
+neck_to_head_center  r_NC ≈ (0.000, 0.100,  0.000)
+head_center_to_eye   r_CE ≈ (0.000, 0.000, -0.160)
 IPD                  d_IPD ≈ 0.064
 ```
 
-These defaults form a letter-Gamma-shaped placeholder model. With the y-down convention, negative `y` is above the neck pivot, and positive `z` is the provisional looking direction. The tracker/IMU is approximated as being at the eye midpoint, so the default has `r_NT ≈ r_NE`. These values should be fitted or user-configured later; they are not anatomical facts.
+These defaults form a letter-Gamma-shaped placeholder model. With the y-up convention, positive `y` is above the neck pivot, and negative `z` is the provisional looking direction. The tracker/IMU is approximated as being at the eye midpoint, so the default has `r_NT ≈ r_NE`. These values should be fitted or user-configured later; they are not anatomical facts.
 
 The important design decision is not the exact numbers, but the separation between:
 
@@ -338,33 +340,33 @@ R(t)^T a_{N,W}
 
 ## 6. Expected Accelerometer Reading
 
-The DK1 dump/probe convention currently treats the calibrated accelerometer vector as gravity-like: a stationary aligned headset measures approximately `(0, +9.8, 0)`. The equations below use that DK1/probe convention, not the opposite-signed physics-specific-force convention.
+The DK1 dump/probe convention treats the calibrated accelerometer vector as body-frame specific force. With the y-up world convention, a stationary aligned headset measures approximately `(0, +9.8, 0)` because gravity is subtracted from physical acceleration before rotating into the body frame.
 
 With gravity vector
 
 ```math
-g_W = (0,g,0),
+g_W = (0, -g, 0),
 ```
 
-the ideal DK1/probe accelerometer-like reading at the tracker is
+the ideal DK1/probe specific-force reading at the tracker is
 
 ```math
-a_{H,\mathrm{dk1}}
+a_{H,\mathrm{specific}}
 =
-R(t)^T(a_{T,W} + g_W).
+R(t)^T(a_{T,W} - g_W).
 ```
 
 Using the refined head/neck model:
 
 ```math
-a_{H,\mathrm{dk1}}
+a_{H,\mathrm{specific}}
 =
 R(t)^T a_{N,W}
 +
 \alpha_H \times r_{NT}
 +
 \omega_H \times(\omega_H \times r_{NT})
-+
+-
 R(t)^T g_W.
 ```
 
@@ -378,7 +380,7 @@ a_{N,H}(t)
 \alpha_H(t) \times r_{NT}
 +
 \omega_H(t) \times (\omega_H(t) \times r_{NT})
-+
+-
 R(t)^T g_W
 +
 \epsilon_a(t).
@@ -396,7 +398,7 @@ a_{N,H}(t)
 \alpha_H(t) \times r_{NT}
 +
 \omega_H(t) \times (\omega_H(t) \times r_{NT})
-+
+-
 R(t)^T g_W
 \right]
 +
@@ -429,7 +431,7 @@ The residual
 \alpha_H(t) \times r_{NT}
 +
 \omega_H(t) \times(\omega_H(t)\times r_{NT})
-+
+-
 R(t)^T g_W
 \right]
 ```
@@ -601,8 +603,8 @@ a_0+j\tau
 (\alpha_0+\beta\tau)\times r_{NT}
 +
 \omega(\tau)\times(\omega(\tau)\times r_{NT})
-+
-R(\tau)^Tg_W
+-
+R(\tau)^T g_W
 +
 \epsilon_a.
 ```
@@ -625,7 +627,7 @@ The term
 
 accounts for centripetal acceleration caused by rotation around the neck pivot.
 
-The residual after subtracting gravity and rotational acceleration is interpreted as approximate translational acceleration of the neck/head system.
+The residual after subtracting rotational acceleration and the gravity-derived specific-force term is interpreted as approximate translational acceleration of the neck/head system.
 
 ---
 
@@ -1060,7 +1062,7 @@ R(t)^T a_{N,W}(t)
 \alpha_H(t)\times r_{NT}
 +
 \omega_H(t)\times(\omega_H(t)\times r_{NT})
-+
+-
 R(t)^T g_W
 \right]
 +
