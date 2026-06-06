@@ -29,14 +29,15 @@ static DK1Vector3 vec3_cross(DK1Vector3 a, DK1Vector3 b) {
 void dk1_head_model_init_default(DK1HeadModel *model) {
     if (!model) return;
 
-    /* Placeholder Gamma-shaped geometry in meters. With the current y-down
-     * convention, negative y is above the neck pivot and positive z is the
-     * provisional looking direction. These defaults should be fitted or
-     * user-configured later. */
-    model->neck_to_tracker = (DK1Vector3){0.0, -0.10, 0.16};
-    model->neck_to_head_center = (DK1Vector3){0.0, -0.10, 0.0};
-    model->head_center_to_eye = (DK1Vector3){0.0, 0.0, 0.16};
+    /* Placeholder Gamma-shaped geometry in meters. With the y-up convention,
+     * positive y is above the neck pivot and negative z is the provisional
+     * looking direction. These defaults should be fitted or user-configured
+     * later. */
+    model->neck_to_tracker = (DK1Vector3){0.0, 0.10, -0.16};
+    model->neck_to_head_center = (DK1Vector3){0.0, 0.10, 0.0};
+    model->head_center_to_eye = (DK1Vector3){0.0, 0.0, -0.16};
     model->ipd_m = 0.064;
+    model->look_dir_head = (DK1Vector3){0.0, 0.0, -1.0};
 }
 
 DK1Vector3 dk1_head_model_neck_to_eye_center(
@@ -118,6 +119,16 @@ void dk1_head_model_eye_positions_world(
             dk1_quat_rotate_vec3(orientation, right_eye_from_neck)
         );
     }
+}
+
+DK1Vector3 dk1_head_model_looking_direction_world(
+    const DK1HeadModel *model,
+    DK1Quaternion orientation
+) {
+    DK1Vector3 look_dir = model
+        ? model->look_dir_head
+        : (DK1Vector3){0.0, 0.0, -1.0};
+    return dk1_quat_rotate_vec3(orientation, look_dir);
 }
 
 DK1Vector3 dk1_head_model_tracker_rotational_accel(

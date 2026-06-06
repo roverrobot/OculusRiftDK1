@@ -73,26 +73,27 @@ static void test_default_geometry(void) {
     DK1HeadModel model;
     dk1_head_model_init_default(&model);
 
-    check_vec3_near("neck_to_tracker", model.neck_to_tracker, 0.0, -0.10, 0.16);
+    check_vec3_near("neck_to_tracker", model.neck_to_tracker, 0.0, 0.10, -0.16);
     check_vec3_near(
         "neck_to_head_center",
         model.neck_to_head_center,
         0.0,
-        -0.10,
+        0.10,
         0.0
     );
-    check_vec3_near("head_center_to_eye", model.head_center_to_eye, 0.0, 0.0, 0.16);
+    check_vec3_near("head_center_to_eye", model.head_center_to_eye, 0.0, 0.0, -0.16);
     check_near("ipd_m", model.ipd_m, 0.064, 1e-12);
+    check_vec3_near("look_dir_head", model.look_dir_head, 0.0, 0.0, -1.0);
 
     DK1Vector3 eye_center = dk1_head_model_neck_to_eye_center(&model);
-    check_vec3_near("eye_center", eye_center, 0.0, -0.10, 0.16);
+    check_vec3_near("eye_center", eye_center, 0.0, 0.10, -0.16);
 
     DK1Vector3 left_eye;
     DK1Vector3 right_eye;
     dk1_head_model_eye_offsets(&model, &left_eye, &right_eye);
 
-    check_vec3_near("left_eye_from_neck", left_eye, -0.032, -0.10, 0.16);
-    check_vec3_near("right_eye_from_neck", right_eye, 0.032, -0.10, 0.16);
+    check_vec3_near("left_eye_from_neck", left_eye, -0.032, 0.10, -0.16);
+    check_vec3_near("right_eye_from_neck", right_eye, 0.032, 0.10, -0.16);
     check_near("eye_separation_x", right_eye.x - left_eye.x, model.ipd_m, 1e-12);
     check_near("eye_midpoint_x", (left_eye.x + right_eye.x) * 0.5, eye_center.x, 1e-12);
     check_near("eye_midpoint_y", (left_eye.y + right_eye.y) * 0.5, eye_center.y, 1e-12);
@@ -213,8 +214,8 @@ static void test_eye_positions_world(void) {
         &left_eye,
         &right_eye
     );
-    check_vec3_near("identity_left_eye_world", left_eye, 0.968, 1.90, 3.16);
-    check_vec3_near("identity_right_eye_world", right_eye, 1.032, 1.90, 3.16);
+    check_vec3_near("identity_left_eye_world", left_eye, 0.968, 2.10, 2.84);
+    check_vec3_near("identity_right_eye_world", right_eye, 1.032, 2.10, 2.84);
 
     double s = sqrt(0.5);
     dk1_head_model_eye_positions_world(
@@ -224,8 +225,8 @@ static void test_eye_positions_world(void) {
         &left_eye,
         &right_eye
     );
-    check_vec3_near("z90_left_eye_world", left_eye, 1.10, 1.968, 3.16);
-    check_vec3_near("z90_right_eye_world", right_eye, 1.10, 2.032, 3.16);
+    check_vec3_near("z90_left_eye_world", left_eye, 0.90, 1.968, 2.84);
+    check_vec3_near("z90_right_eye_world", right_eye, 0.90, 2.032, 2.84);
 }
 
 static void test_null_eye_position_outputs(void) {
@@ -251,7 +252,7 @@ static void test_null_eye_position_outputs(void) {
         &left_eye,
         NULL
     );
-    check_vec3_near("one_null_left_eye_world", left_eye, 0.968, 1.90, 3.16);
+    check_vec3_near("one_null_left_eye_world", left_eye, 0.968, 2.10, 2.84);
 
     DK1Vector3 right_eye = {0.0, 0.0, 0.0};
     dk1_head_model_eye_positions_world(
@@ -261,7 +262,7 @@ static void test_null_eye_position_outputs(void) {
         NULL,
         &right_eye
     );
-    check_vec3_near("one_null_right_eye_world", right_eye, 1.032, 1.90, 3.16);
+    check_vec3_near("one_null_right_eye_world", right_eye, 1.032, 2.10, 2.84);
 }
 
 static void test_stereo_world_invariants(void) {
@@ -313,7 +314,7 @@ static void test_tracker_rotational_accel(void) {
         omega_zero,
         alpha_z
     );
-    check_vec3_near("tangential_accel", tangential, 0.20, 0.0, 0.0);
+    check_vec3_near("tangential_accel", tangential, -0.20, 0.0, 0.0);
 
     DK1Vector3 omega_z = {0.0, 0.0, 2.0};
     DK1Vector3 alpha_zero = {0.0, 0.0, 0.0};
@@ -322,14 +323,38 @@ static void test_tracker_rotational_accel(void) {
         omega_z,
         alpha_zero
     );
-    check_vec3_near("centripetal_accel", centripetal, 0.0, 0.40, 0.0);
+    check_vec3_near("centripetal_accel", centripetal, 0.0, -0.40, 0.0);
 
     DK1Vector3 combined = dk1_head_model_tracker_rotational_accel(
         &model,
         omega_z,
         alpha_z
     );
-    check_vec3_near("combined_rotational_accel", combined, 0.20, 0.40, 0.0);
+    check_vec3_near("combined_rotational_accel", combined, -0.20, -0.40, 0.0);
+}
+
+static void test_looking_direction_world(void) {
+    DK1HeadModel model;
+    dk1_head_model_init_default(&model);
+
+    DK1Quaternion identity = {1.0, 0.0, 0.0, 0.0};
+    check_vec3_near(
+        "identity_look_dir",
+        dk1_head_model_looking_direction_world(&model, identity),
+        0.0,
+        0.0,
+        -1.0
+    );
+
+    double s = sqrt(0.5);
+    DK1Quaternion y90 = {s, 0.0, s, 0.0};
+    check_vec3_near(
+        "y90_look_dir",
+        dk1_head_model_looking_direction_world(&model, y90),
+        -1.0,
+        0.0,
+        0.0
+    );
 }
 
 int main(void) {
@@ -343,6 +368,7 @@ int main(void) {
     test_null_eye_position_outputs();
     test_stereo_world_invariants();
     test_tracker_rotational_accel();
+    test_looking_direction_world();
 
     if (failures != 0) {
         fprintf(stderr, "%d head model test failure(s)\n", failures);

@@ -60,4 +60,19 @@ int dk1_tracker_get_orientation(
     DK1Quaternion *out_q
 );
 
+int dk1_tracker_get_state(
+    DK1Tracker *tracker,
+    DK1TrackerState *out_state
+);
+
+int dk1_tracker_set_gyro_bias(
+    DK1Tracker *tracker,
+    DK1Vector3 bias
+);
+
+int dk1_tracker_set_mag_calibration(
+    DK1Tracker *tracker,
+    const DK1MagCalibration *calibration
+);
+
 #endif // DK1_TRACKER_H

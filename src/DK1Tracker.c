@@ -140,3 +140,23 @@ int dk1_tracker_get_orientation(DK1Tracker *tracker, DK1Quaternion *out_q) {
     *out_q = tracker->estimator.orientation;
     return DK1_OK;
 }
+
+int dk1_tracker_get_state(DK1Tracker *tracker, DK1TrackerState *out_state) {
+    if (!tracker || !out_state) return DK1_ERROR_INVALID_ARGUMENT;
+    dk1_estimator_get_state(&tracker->estimator, out_state);
+    return DK1_OK;
+}
+
+int dk1_tracker_set_gyro_bias(DK1Tracker *tracker, DK1Vector3 bias) {
+    if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
+    dk1_estimator_set_gyro_bias(&tracker->estimator, bias);
+    return DK1_OK;
+}
+
+int dk1_tracker_set_mag_calibration(
+    DK1Tracker *tracker,
+    const DK1MagCalibration *calibration
+) {
+    if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
+    return dk1_estimator_set_mag_calibration(&tracker->estimator, calibration);
+}

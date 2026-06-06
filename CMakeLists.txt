@@ -45,6 +45,13 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     add_test(NAME dk1_head_model COMMAND dk1_head_model_test)
+
+    add_executable(dk1_estimator_test tests/test_estimator.c)
+    target_link_libraries(dk1_estimator_test PRIVATE DK1Tracker)
+    target_include_directories(dk1_estimator_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME dk1_estimator COMMAND dk1_estimator_test)
 endif()
 
 # ---------------------------------------------------------------------------

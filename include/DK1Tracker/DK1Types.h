@@ -16,6 +16,44 @@ typedef struct DK1Quaternion {
     double z;
 } DK1Quaternion;
 
+typedef struct DK1MagCalibration {
+    DK1Vector3 hard_iron;
+    int axis_order[3];
+    DK1Vector3 axis_signs;
+    double correction_rate;
+    uint32_t correction_interval_samples;
+} DK1MagCalibration;
+
+typedef struct DK1TrackerState {
+    int initialized;
+    uint64_t sample_index;
+    uint16_t device_timestamp;
+    double time_s;
+    double dt_s;
+
+    DK1Quaternion orientation;
+    DK1Vector3 unbiased_gyro;
+    DK1Vector3 angular_accel;
+
+    DK1Vector3 look_dir_world;
+    DK1Vector3 eye_center_world;
+    DK1Vector3 left_eye_world;
+    DK1Vector3 right_eye_world;
+
+    DK1Vector3 predicted_accel;
+    DK1Vector3 accel_residual;
+    DK1Vector3 pivot_accel_body;
+    DK1Vector3 pivot_accel_world;
+
+    DK1Vector3 mag_calibrated;
+    DK1Vector3 expected_north_world;
+    int expected_north_initialized;
+    double heading_residual_deg;
+    double mag_correction_rate;
+    uint32_t mag_correction_interval_samples;
+    uint64_t mag_correction_update_count;
+} DK1TrackerState;
+
 typedef struct DK1Sample {
     uint16_t timestamp;
     uint8_t sample_count;
