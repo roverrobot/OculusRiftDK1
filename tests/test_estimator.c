@@ -91,6 +91,8 @@ static void test_initial_orientation_and_pose(void) {
     check_vec3_near("look_dir_world", state.look_dir_world, 0.0, 0.0, -1.0, 1e-12);
     check_vec3_near("eye_center_world", state.eye_center_world, 0.0, 0.10, -0.16, 1e-12);
     check_vec3_near("expected_north_world", state.expected_north_world, 1.0, 0.0, 0.0, 1e-12);
+    check_vec3_near("observed_north_world", state.observed_north_world, 1.0, 0.0, 0.0, 1e-12);
+    check_int_equal("north_window_sample_count", state.north_window_sample_count, 1);
 }
 
 static void test_gyro_integration_uses_trapezoidal_step(void) {
@@ -160,11 +162,62 @@ static void test_mag_calibration_validation(void) {
     calibration.axis_order[0] = 0;
     calibration.axis_order[1] = 2;
     calibration.axis_order[2] = 1;
+    calibration.correction_interval_samples = DK1_ESTIMATOR_MAX_NORTH_WINDOW_SAMPLES + 1;
+    check_int_equal(
+        "invalid_large_window",
+        (uint64_t)dk1_estimator_set_mag_calibration(&estimator, &calibration),
+        (uint64_t)DK1_ERROR_INVALID_ARGUMENT
+    );
+
+    calibration.correction_interval_samples = 20;
     check_int_equal(
         "valid_axis_order",
         (uint64_t)dk1_estimator_set_mag_calibration(&estimator, &calibration),
         (uint64_t)DK1_OK
     );
+}
+
+static void test_north_average_uses_twenty_samples(void) {
+    DK1Estimator estimator;
+    DK1TrackerState state;
+    DK1Sample sample = stationary_sample(0);
+    DK1MagCalibration calibration = {
+        .hard_iron = {0.0, 0.0, 0.0},
+        .axis_order = {0, 1, 2},
+        .axis_signs = {1.0, 1.0, 1.0},
+        .correction_rate = 0.0,
+        .correction_interval_samples = 20
+    };
+    double inv_sqrt_2 = 1.0 / sqrt(2.0);
+
+    dk1_estimator_init(&estimator);
+    dk1_estimator_set_mag_calibration(&estimator, &calibration);
+    dk1_estimator_update(&estimator, &sample);
+
+    for (uint16_t i = 1; i < 10; ++i) {
+        sample.timestamp = i;
+        sample.mag = (DK1Vector3){1.0, 0.0, 0.0};
+        dk1_estimator_update(&estimator, &sample);
+    }
+
+    for (uint16_t i = 10; i < 20; ++i) {
+        sample.timestamp = i;
+        sample.mag = (DK1Vector3){0.0, 0.0, 1.0};
+        dk1_estimator_update(&estimator, &sample);
+    }
+
+    dk1_estimator_get_state(&estimator, &state);
+    check_int_equal("north_average_sample_index", state.sample_index, 20);
+    check_int_equal("north_average_window_count", state.north_window_sample_count, 20);
+    check_vec3_near(
+        "north_average_observed",
+        state.observed_north_world,
+        inv_sqrt_2,
+        0.0,
+        inv_sqrt_2,
+        1e-12
+    );
+    check_near("north_average_heading_residual", state.heading_residual_deg, -45.0, 1e-12);
 }
 
 static void test_yaw_correction_uses_twenty_sample_cadence(void) {
@@ -195,6 +248,7 @@ static void test_yaw_correction_uses_twenty_sample_cadence(void) {
     dk1_estimator_update(&estimator, &sample);
     dk1_estimator_get_state(&estimator, &state);
     check_int_equal("correction_at_20", state.sample_index, 20);
+    check_int_equal("correction_window_count", state.north_window_sample_count, 20);
     check_int_equal("first_correction_count", state.mag_correction_update_count, 1);
 
     for (uint16_t i = 20; i < 39; ++i) {
@@ -216,6 +270,7 @@ int main(void) {
     test_gyro_integration_uses_trapezoidal_step();
     test_report_timestamp_expansion();
     test_mag_calibration_validation();
+    test_north_average_uses_twenty_samples();
     test_yaw_correction_uses_twenty_sample_cadence();
 
     if (failures != 0) {

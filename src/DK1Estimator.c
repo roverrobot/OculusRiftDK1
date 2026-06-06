@@ -193,6 +193,81 @@ static int observed_north_world(
     return 1;
 }
 
+static uint32_t north_window_size(const DK1Estimator *est) {
+    uint32_t window_size = est->mag_calibration.correction_interval_samples;
+    if (window_size == 0) window_size = DK1_DEFAULT_YAW_CORRECTION_INTERVAL;
+    if (window_size > DK1_ESTIMATOR_MAX_NORTH_WINDOW_SAMPLES) {
+        window_size = DK1_ESTIMATOR_MAX_NORTH_WINDOW_SAMPLES;
+    }
+    return window_size;
+}
+
+static void update_north_window_state(DK1Estimator *est) {
+    if (est->north_window_count == 0) return;
+
+    DK1Vector3 observed = vec3_normalize_or(
+        est->north_window_sum,
+        est->state.expected_north_world
+    );
+    est->state.observed_north_world = observed;
+
+    if (!est->state.expected_north_initialized) {
+        est->state.expected_north_world = observed;
+        est->state.expected_north_initialized = 1;
+    }
+
+    double error = signed_heading_error_rad(est->state.expected_north_world, observed);
+    est->state.heading_residual_deg = radians_to_degrees(error);
+    est->state.north_window_sample_count = est->north_window_count;
+}
+
+static void reset_north_window(DK1Estimator *est) {
+    memset(est->north_window, 0, sizeof(est->north_window));
+    est->north_window_sum = (DK1Vector3){0.0, 0.0, 0.0};
+    est->north_window_index = 0;
+    est->north_window_count = 0;
+    est->state.north_window_sample_count = 0;
+    est->state.observed_north_world = est->state.expected_north_world;
+}
+
+static void rotate_north_window(DK1Estimator *est, DK1Quaternion rotation) {
+    for (uint32_t i = 0; i < est->north_window_count; ++i) {
+        est->north_window[i] = dk1_quat_rotate_vec3(rotation, est->north_window[i]);
+    }
+    est->north_window_sum = dk1_quat_rotate_vec3(rotation, est->north_window_sum);
+    update_north_window_state(est);
+}
+
+static void update_north_window(DK1Estimator *est, DK1Vector3 mag_calibrated) {
+    uint32_t window_size = north_window_size(est);
+    DK1Vector3 observed = {0.0, 0.0, 0.0};
+    if (!observed_north_world(
+            est->orientation,
+            mag_calibrated,
+            est->state.expected_north_world,
+            &observed
+        )) {
+        return;
+    }
+
+    if (est->north_window_count < window_size) {
+        est->north_window[est->north_window_index] = observed;
+        est->north_window_sum = vec3_add(est->north_window_sum, observed);
+        est->north_window_count++;
+    } else {
+        DK1Vector3 old = est->north_window[est->north_window_index];
+        est->north_window[est->north_window_index] = observed;
+        est->north_window_sum = vec3_add(vec3_sub(est->north_window_sum, old), observed);
+    }
+
+    est->north_window_index++;
+    if (est->north_window_index >= window_size) {
+        est->north_window_index = 0;
+    }
+
+    update_north_window_state(est);
+}
+
 static DK1Vector3 predicted_specific_force(DK1Quaternion orientation) {
     return vec3_scale(quat_rotate_inverse(orientation, DK1_G_WORLD), -1.0);
 }
@@ -222,57 +297,30 @@ static double estimator_sample_dt(DK1Estimator *est, const DK1Sample *sample) {
     return clamp_dt(fallback);
 }
 
-static void update_heading_residual(DK1Estimator *est, DK1Vector3 mag_calibrated) {
-    DK1Vector3 observed = {0.0, 0.0, 0.0};
-    if (!observed_north_world(
-            est->orientation,
-            mag_calibrated,
-            est->state.expected_north_world,
-            &observed
-        )) {
-        return;
-    }
-
-    if (!est->state.expected_north_initialized) {
-        est->state.expected_north_world = observed;
-        est->state.expected_north_initialized = 1;
-    }
-
-    double error = signed_heading_error_rad(est->state.expected_north_world, observed);
-    est->state.heading_residual_deg = radians_to_degrees(error);
-}
-
-static void maybe_apply_yaw_correction(DK1Estimator *est, DK1Vector3 mag_calibrated) {
+static void maybe_apply_yaw_correction(DK1Estimator *est) {
     const DK1MagCalibration *calibration = &est->mag_calibration;
-    uint32_t interval = calibration->correction_interval_samples;
-    if (interval == 0) interval = DK1_DEFAULT_YAW_CORRECTION_INTERVAL;
+    uint32_t interval = north_window_size(est);
 
     if (calibration->correction_rate <= 0.0) return;
     if (!est->state.expected_north_initialized) return;
+    if (est->north_window_count < interval) return;
     if (est->state.sample_index % (uint64_t)interval != 0u) return;
 
-    DK1Vector3 observed = {0.0, 0.0, 0.0};
-    if (!observed_north_world(
-            est->orientation,
-            mag_calibrated,
-            est->state.expected_north_world,
-            &observed
-        )) {
-        return;
-    }
+    double error = signed_heading_error_rad(
+        est->state.expected_north_world,
+        est->state.observed_north_world
+    );
+    double correction_fraction = 1.0 - exp(-calibration->correction_rate);
+    if (!isfinite(correction_fraction)) correction_fraction = 1.0;
+    if (correction_fraction < 0.0) correction_fraction = 0.0;
+    if (correction_fraction > 1.0) correction_fraction = 1.0;
 
-    double error = signed_heading_error_rad(est->state.expected_north_world, observed);
-    double dt_since_correction = est->state.time_s - est->last_mag_correction_time_s;
-    if (dt_since_correction <= 0.0 || !isfinite(dt_since_correction)) {
-        dt_since_correction = est->state.dt_s * (double)interval;
-    }
-
-    double correction_fraction = 1.0 - exp(-calibration->correction_rate * dt_since_correction);
     double heading_step = error * correction_fraction;
     DK1Quaternion correction = quat_from_axis_angle(DK1_WORLD_UP, -heading_step);
 
     est->orientation = quat_normalize(quat_mul(correction, est->orientation));
-    est->last_mag_correction_time_s = est->state.time_s;
+    rotate_north_window(est, correction);
+    est->state.heading_residual_deg = radians_to_degrees(error - heading_step);
     est->state.mag_correction_update_count++;
 }
 
@@ -320,7 +368,6 @@ static void update_derived_state(
     est->state.mag_correction_rate = est->mag_calibration.correction_rate;
     est->state.mag_correction_interval_samples =
         est->mag_calibration.correction_interval_samples;
-    update_heading_residual(est, mag_calibrated);
 }
 
 void dk1_estimator_init(DK1Estimator *est) {
@@ -330,6 +377,7 @@ void dk1_estimator_init(DK1Estimator *est) {
     est->orientation = (DK1Quaternion){1.0, 0.0, 0.0, 0.0};
     est->state.orientation = est->orientation;
     est->state.expected_north_world = (DK1Vector3){1.0, 0.0, 0.0};
+    est->state.observed_north_world = est->state.expected_north_world;
     est->state.mag_correction_interval_samples = DK1_DEFAULT_YAW_CORRECTION_INTERVAL;
     est->mag_calibration.hard_iron = (DK1Vector3){0.0, 0.0, 0.0};
     est->mag_calibration.axis_order[0] = 0;
@@ -362,6 +410,7 @@ void dk1_estimator_update(DK1Estimator *est, const DK1Sample *sample) {
         est->last_report_sample_dt_s = DK1_DEFAULT_SAMPLE_DT_S;
         est->previous_unbiased_gyro = unbiased_gyro;
         est->have_previous_sample = 1;
+        update_north_window(est, mag_calibrated);
         update_derived_state(
             est,
             sample,
@@ -389,8 +438,8 @@ void dk1_estimator_update(DK1Estimator *est, const DK1Sample *sample) {
         1.0 / dt
     );
 
-    update_heading_residual(est, mag_calibrated);
-    maybe_apply_yaw_correction(est, mag_calibrated);
+    update_north_window(est, mag_calibrated);
+    maybe_apply_yaw_correction(est);
     update_derived_state(est, sample, unbiased_gyro, angular_accel, mag_calibrated);
 
     est->previous_unbiased_gyro = unbiased_gyro;
@@ -418,7 +467,10 @@ int dk1_estimator_set_mag_calibration(
     if (calibration->correction_rate < 0.0 || !isfinite(calibration->correction_rate)) {
         return DK1_ERROR_INVALID_ARGUMENT;
     }
-    if (calibration->correction_interval_samples == 0) {
+    if (
+        calibration->correction_interval_samples == 0 ||
+        calibration->correction_interval_samples > DK1_ESTIMATOR_MAX_NORTH_WINDOW_SAMPLES
+    ) {
         return DK1_ERROR_INVALID_ARGUMENT;
     }
 
@@ -426,5 +478,6 @@ int dk1_estimator_set_mag_calibration(
     est->state.mag_correction_rate = calibration->correction_rate;
     est->state.mag_correction_interval_samples =
         calibration->correction_interval_samples;
+    reset_north_window(est);
     return DK1_OK;
 }

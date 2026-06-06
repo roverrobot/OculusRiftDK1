@@ -47,7 +47,9 @@ typedef struct DK1TrackerState {
 
     DK1Vector3 mag_calibrated;
     DK1Vector3 expected_north_world;
+    DK1Vector3 observed_north_world;
     int expected_north_initialized;
+    uint32_t north_window_sample_count;
     double heading_residual_deg;
     double mag_correction_rate;
     uint32_t mag_correction_interval_samples;

@@ -5,6 +5,10 @@
 #include "DK1HeadModel.h"
 #include <stdint.h>
 
+enum {
+    DK1_ESTIMATOR_MAX_NORTH_WINDOW_SAMPLES = 128
+};
+
 typedef struct {
     DK1Quaternion orientation;
     DK1TrackerState state;
@@ -14,7 +18,10 @@ typedef struct {
     DK1Vector3 previous_unbiased_gyro;
     uint16_t last_report_timestamp;
     double last_report_sample_dt_s;
-    double last_mag_correction_time_s;
+    DK1Vector3 north_window[DK1_ESTIMATOR_MAX_NORTH_WINDOW_SAMPLES];
+    DK1Vector3 north_window_sum;
+    uint32_t north_window_index;
+    uint32_t north_window_count;
     int have_previous_sample;
 } DK1Estimator;
 
