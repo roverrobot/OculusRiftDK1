@@ -24,6 +24,20 @@ typedef struct DK1MagCalibration {
     uint32_t correction_interval_samples;
 } DK1MagCalibration;
 
+enum {
+    DK1_DEFAULT_LEFT_DIAL = 5,
+    DK1_DEFAULT_RIGHT_DIAL = 5,
+    DK1_DEFAULT_GRID_WIDTH = 64,
+    DK1_DEFAULT_GRID_HEIGHT = 64
+};
+
+typedef struct DK1Config {
+    int left_dial;
+    int right_dial;
+    int grid_width;
+    int grid_height;
+} DK1Config;
+
 typedef struct DK1TrackerState {
     int initialized;
     uint64_t sample_index;

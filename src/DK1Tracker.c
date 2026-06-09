@@ -4,6 +4,7 @@
 #include "DK1Parser.h"
 #include "DK1Estimator.h"
 #include "DK1RingBuffer.h"
+#include "DK1Config.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@ struct DK1Tracker {
     DK1HIDBackend backend;
     DK1Estimator estimator;
     DK1RingBuffer ring_buffer;
+    DK1Config config;
     
     DK1SampleCallback user_callback;
     void *user_callback_data;
@@ -48,8 +50,16 @@ static void internal_report_cb(const uint8_t *data, size_t length, void *user_da
 }
 
 int dk1_tracker_create(DK1Tracker **out_tracker) {
+    if (!out_tracker) return DK1_ERROR_INVALID_ARGUMENT;
+
     DK1Tracker *tracker = calloc(1, sizeof(DK1Tracker));
     if (!tracker) return DK1_ERROR_IO;
+
+    int config_result = dk1_config_load_default(&tracker->config);
+    if (config_result != DK1_OK) {
+        free(tracker);
+        return config_result;
+    }
     
     dk1_hid_backend_create_mac(&tracker->backend);
     dk1_estimator_init(&tracker->estimator);
@@ -144,6 +154,12 @@ int dk1_tracker_get_orientation(DK1Tracker *tracker, DK1Quaternion *out_q) {
 int dk1_tracker_get_state(DK1Tracker *tracker, DK1TrackerState *out_state) {
     if (!tracker || !out_state) return DK1_ERROR_INVALID_ARGUMENT;
     dk1_estimator_get_state(&tracker->estimator, out_state);
+    return DK1_OK;
+}
+
+int dk1_tracker_get_config(const DK1Tracker *tracker, DK1Config *out_config) {
+    if (!tracker || !out_config) return DK1_ERROR_INVALID_ARGUMENT;
+    *out_config = tracker->config;
     return DK1_OK;
 }
 

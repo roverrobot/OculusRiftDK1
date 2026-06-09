@@ -65,6 +65,11 @@ int dk1_tracker_get_state(
     DK1TrackerState *out_state
 );
 
+int dk1_tracker_get_config(
+    const DK1Tracker *tracker,
+    DK1Config *out_config
+);
+
 int dk1_tracker_set_gyro_bias(
     DK1Tracker *tracker,
     DK1Vector3 bias
