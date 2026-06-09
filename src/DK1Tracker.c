@@ -10,6 +10,15 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <pthread.h>
+
+#define DK1_TRACKER_REPORT_QUEUE_CAPACITY 8192
+#define DK1_TRACKER_REPORT_MAX_LEN 64
+
+typedef struct DK1QueuedReport {
+    uint8_t data[DK1_TRACKER_REPORT_MAX_LEN];
+    size_t length;
+} DK1QueuedReport;
 
 struct DK1Tracker {
     DK1HIDBackend backend;
@@ -23,6 +32,22 @@ struct DK1Tracker {
 
     DK1RawReportCallback raw_callback;
     void *raw_callback_data;
+
+    DK1QueuedReport report_queue[DK1_TRACKER_REPORT_QUEUE_CAPACITY];
+    size_t report_queue_head;
+    size_t report_queue_tail;
+    size_t report_queue_count;
+    uint64_t dropped_report_count;
+
+    pthread_t worker_thread;
+    int worker_thread_running;
+    int worker_thread_started;
+    pthread_mutex_t report_mutex;
+    pthread_cond_t report_cond;
+    pthread_mutex_t state_mutex;
+    pthread_mutex_t callback_mutex;
+    int sync_initialized;
+    DK1TrackerState latest_state;
     
     int is_open;
     int is_started;
@@ -30,25 +55,138 @@ struct DK1Tracker {
     uint16_t keepalive_cmd_id;
 };
 
-static void internal_report_cb(const uint8_t *data, size_t length, void *user_data) {
-    DK1Tracker *tracker = (DK1Tracker *)user_data;
-    
-    /* Forward raw report to user callback if registered */
-    if (tracker->raw_callback) {
-        tracker->raw_callback(data, length, tracker->raw_callback_data);
+static void tracker_destroy_sync(DK1Tracker *tracker) {
+    if (!tracker || !tracker->sync_initialized) return;
+    pthread_mutex_destroy(&tracker->callback_mutex);
+    pthread_mutex_destroy(&tracker->state_mutex);
+    pthread_cond_destroy(&tracker->report_cond);
+    pthread_mutex_destroy(&tracker->report_mutex);
+    tracker->sync_initialized = 0;
+}
+
+static int tracker_init_sync(DK1Tracker *tracker) {
+    if (pthread_mutex_init(&tracker->report_mutex, NULL) != 0) {
+        return DK1_ERROR_IO;
+    }
+    if (pthread_cond_init(&tracker->report_cond, NULL) != 0) {
+        pthread_mutex_destroy(&tracker->report_mutex);
+        return DK1_ERROR_IO;
+    }
+    if (pthread_mutex_init(&tracker->state_mutex, NULL) != 0) {
+        pthread_cond_destroy(&tracker->report_cond);
+        pthread_mutex_destroy(&tracker->report_mutex);
+        return DK1_ERROR_IO;
+    }
+    if (pthread_mutex_init(&tracker->callback_mutex, NULL) != 0) {
+        pthread_mutex_destroy(&tracker->state_mutex);
+        pthread_cond_destroy(&tracker->report_cond);
+        pthread_mutex_destroy(&tracker->report_mutex);
+        return DK1_ERROR_IO;
+    }
+    tracker->sync_initialized = 1;
+    return DK1_OK;
+}
+
+static void tracker_publish_state_locked(DK1Tracker *tracker) {
+    dk1_estimator_get_state(&tracker->estimator, &tracker->latest_state);
+}
+
+static void tracker_queue_report(DK1Tracker *tracker, const uint8_t *data, size_t length) {
+    if (!tracker || !data) return;
+    if (length > DK1_TRACKER_REPORT_MAX_LEN) {
+        length = DK1_TRACKER_REPORT_MAX_LEN;
+    }
+
+    pthread_mutex_lock(&tracker->report_mutex);
+    if (!tracker->worker_thread_running) {
+        pthread_mutex_unlock(&tracker->report_mutex);
+        return;
+    }
+    if (tracker->report_queue_count == DK1_TRACKER_REPORT_QUEUE_CAPACITY) {
+        tracker->report_queue_head =
+            (tracker->report_queue_head + 1) % DK1_TRACKER_REPORT_QUEUE_CAPACITY;
+        tracker->report_queue_count--;
+        tracker->dropped_report_count++;
+    }
+
+    DK1QueuedReport *entry = &tracker->report_queue[tracker->report_queue_tail];
+    memcpy(entry->data, data, length);
+    entry->length = length;
+    tracker->report_queue_tail =
+        (tracker->report_queue_tail + 1) % DK1_TRACKER_REPORT_QUEUE_CAPACITY;
+    tracker->report_queue_count++;
+    pthread_cond_signal(&tracker->report_cond);
+    pthread_mutex_unlock(&tracker->report_mutex);
+}
+
+static int tracker_pop_report(DK1Tracker *tracker, DK1QueuedReport *out_report) {
+    pthread_mutex_lock(&tracker->report_mutex);
+    while (tracker->report_queue_count == 0 && tracker->worker_thread_running) {
+        pthread_cond_wait(&tracker->report_cond, &tracker->report_mutex);
+    }
+
+    if (tracker->report_queue_count == 0 && !tracker->worker_thread_running) {
+        pthread_mutex_unlock(&tracker->report_mutex);
+        return 0;
+    }
+
+    *out_report = tracker->report_queue[tracker->report_queue_head];
+    tracker->report_queue_head =
+        (tracker->report_queue_head + 1) % DK1_TRACKER_REPORT_QUEUE_CAPACITY;
+    tracker->report_queue_count--;
+    pthread_mutex_unlock(&tracker->report_mutex);
+    return 1;
+}
+
+static void tracker_process_report(DK1Tracker *tracker, const DK1QueuedReport *report) {
+    DK1RawReportCallback raw_callback = NULL;
+    void *raw_callback_data = NULL;
+    pthread_mutex_lock(&tracker->callback_mutex);
+    raw_callback = tracker->raw_callback;
+    raw_callback_data = tracker->raw_callback_data;
+    pthread_mutex_unlock(&tracker->callback_mutex);
+
+    if (raw_callback) {
+        raw_callback(report->data, report->length, raw_callback_data);
     }
 
     DK1Sample samples[3];
     size_t count = 0;
-    if (dk1_parse_input_report(data, length, samples, 3, &count) == DK1_OK) {
-        for (size_t i = 0; i < count; ++i) {
-            dk1_ring_buffer_push(&tracker->ring_buffer, &samples[i]);
-            dk1_estimator_update(&tracker->estimator, &samples[i]);
-            if (tracker->user_callback) {
-                tracker->user_callback(&samples[i], tracker->user_callback_data);
-            }
+    if (dk1_parse_input_report(report->data, report->length, samples, 3, &count) != DK1_OK) {
+        return;
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        pthread_mutex_lock(&tracker->state_mutex);
+        dk1_ring_buffer_push(&tracker->ring_buffer, &samples[i]);
+        dk1_estimator_update(&tracker->estimator, &samples[i]);
+        tracker_publish_state_locked(tracker);
+        pthread_mutex_unlock(&tracker->state_mutex);
+
+        DK1SampleCallback user_callback = NULL;
+        void *user_callback_data = NULL;
+        pthread_mutex_lock(&tracker->callback_mutex);
+        user_callback = tracker->user_callback;
+        user_callback_data = tracker->user_callback_data;
+        pthread_mutex_unlock(&tracker->callback_mutex);
+        if (user_callback) {
+            user_callback(&samples[i], user_callback_data);
         }
     }
+}
+
+static void *tracker_worker_main(void *user_data) {
+    DK1Tracker *tracker = (DK1Tracker *)user_data;
+    DK1QueuedReport report;
+    while (tracker_pop_report(tracker, &report)) {
+        tracker_process_report(tracker, &report);
+    }
+    return NULL;
+}
+
+static void internal_report_cb(const uint8_t *data, size_t length, void *user_data) {
+    DK1Tracker *tracker = (DK1Tracker *)user_data;
+    tracker_queue_report(tracker, data, length);
 }
 
 int dk1_tracker_create(DK1Tracker **out_tracker) {
@@ -87,6 +225,16 @@ int dk1_tracker_create(DK1Tracker **out_tracker) {
     dk1_hid_backend_create_mac(&tracker->backend);
     dk1_estimator_init(&tracker->estimator);
     dk1_ring_buffer_init(&tracker->ring_buffer);
+    int sync_result = tracker_init_sync(tracker);
+    if (sync_result != DK1_OK) {
+        dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_LEFT]);
+        dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_RIGHT]);
+        free(tracker);
+        return sync_result;
+    }
+    pthread_mutex_lock(&tracker->state_mutex);
+    tracker_publish_state_locked(tracker);
+    pthread_mutex_unlock(&tracker->state_mutex);
     tracker->keepalive_cmd_id = 0;
     
     *out_tracker = tracker;
@@ -98,6 +246,7 @@ void dk1_tracker_destroy(DK1Tracker *tracker) {
     dk1_tracker_close(tracker);
     dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_LEFT]);
     dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_RIGHT]);
+    tracker_destroy_sync(tracker);
     free(tracker);
 }
 
@@ -113,9 +262,9 @@ int dk1_tracker_open(DK1Tracker *tracker) {
 
 void dk1_tracker_close(DK1Tracker *tracker) {
     if (!tracker || !tracker->is_open) return;
+    dk1_tracker_stop(tracker);
     tracker->backend.close(&tracker->backend);
     tracker->is_open = 0;
-    tracker->is_started = 0;
 }
 
 int dk1_tracker_is_open(const DK1Tracker *tracker) {
@@ -125,33 +274,83 @@ int dk1_tracker_is_open(const DK1Tracker *tracker) {
 int dk1_tracker_start(DK1Tracker *tracker) {
     if (!tracker || !tracker->is_open) return DK1_ERROR_NOT_OPEN;
     if (tracker->is_started) return DK1_OK;
+
+    pthread_mutex_lock(&tracker->report_mutex);
+    tracker->report_queue_head = 0;
+    tracker->report_queue_tail = 0;
+    tracker->report_queue_count = 0;
+    tracker->dropped_report_count = 0;
+    tracker->worker_thread_running = 1;
+    pthread_mutex_unlock(&tracker->report_mutex);
+
+    int thread_rc = pthread_create(
+        &tracker->worker_thread,
+        NULL,
+        tracker_worker_main,
+        tracker
+    );
+    if (thread_rc != 0) {
+        pthread_mutex_lock(&tracker->report_mutex);
+        tracker->worker_thread_running = 0;
+        pthread_mutex_unlock(&tracker->report_mutex);
+        return DK1_ERROR_IO;
+    }
+    tracker->worker_thread_started = 1;
+
     int res = tracker->backend.start(&tracker->backend);
-    if (res == DK1_OK) tracker->is_started = 1;
+    if (res != DK1_OK) {
+        pthread_mutex_lock(&tracker->report_mutex);
+        tracker->worker_thread_running = 0;
+        pthread_cond_signal(&tracker->report_cond);
+        pthread_mutex_unlock(&tracker->report_mutex);
+        pthread_join(tracker->worker_thread, NULL);
+        tracker->worker_thread_started = 0;
+        return res;
+    }
+
+    tracker->is_started = 1;
     return res;
 }
 
 void dk1_tracker_stop(DK1Tracker *tracker) {
     if (!tracker || !tracker->is_started) return;
     tracker->backend.stop(&tracker->backend);
+
+    pthread_mutex_lock(&tracker->report_mutex);
+    tracker->worker_thread_running = 0;
+    pthread_cond_signal(&tracker->report_cond);
+    pthread_mutex_unlock(&tracker->report_mutex);
+
+    if (tracker->worker_thread_started) {
+        pthread_join(tracker->worker_thread, NULL);
+        tracker->worker_thread_started = 0;
+    }
     tracker->is_started = 0;
 }
 
 void dk1_tracker_set_sample_callback(DK1Tracker *tracker, DK1SampleCallback callback, void *user_data) {
     if (!tracker) return;
+    pthread_mutex_lock(&tracker->callback_mutex);
     tracker->user_callback = callback;
     tracker->user_callback_data = user_data;
+    pthread_mutex_unlock(&tracker->callback_mutex);
 }
 
 int dk1_tracker_set_raw_report_callback(DK1Tracker *tracker, DK1RawReportCallback callback, void *user_data) {
     if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
+    pthread_mutex_lock(&tracker->callback_mutex);
     tracker->raw_callback = callback;
     tracker->raw_callback_data = user_data;
+    pthread_mutex_unlock(&tracker->callback_mutex);
     return DK1_OK;
 }
 
 int dk1_tracker_poll_sample(DK1Tracker *tracker, DK1Sample *out_sample) {
     if (!tracker || !out_sample) return DK1_ERROR_INVALID_ARGUMENT;
-    return dk1_ring_buffer_pop(&tracker->ring_buffer, out_sample) ? DK1_OK : DK1_ERROR_IO;
+    pthread_mutex_lock(&tracker->state_mutex);
+    bool popped = dk1_ring_buffer_pop(&tracker->ring_buffer, out_sample);
+    pthread_mutex_unlock(&tracker->state_mutex);
+    return popped ? DK1_OK : DK1_ERROR_IO;
 }
 
 int dk1_tracker_set_keepalive(DK1Tracker *tracker, uint16_t interval_ms) {
@@ -172,13 +371,17 @@ int dk1_tracker_set_keepalive(DK1Tracker *tracker, uint16_t interval_ms) {
 
 int dk1_tracker_get_orientation(DK1Tracker *tracker, DK1Quaternion *out_q) {
     if (!tracker || !out_q) return DK1_ERROR_INVALID_ARGUMENT;
-    *out_q = tracker->estimator.orientation;
+    pthread_mutex_lock(&tracker->state_mutex);
+    *out_q = tracker->latest_state.orientation;
+    pthread_mutex_unlock(&tracker->state_mutex);
     return DK1_OK;
 }
 
 int dk1_tracker_get_state(DK1Tracker *tracker, DK1TrackerState *out_state) {
     if (!tracker || !out_state) return DK1_ERROR_INVALID_ARGUMENT;
-    dk1_estimator_get_state(&tracker->estimator, out_state);
+    pthread_mutex_lock(&tracker->state_mutex);
+    *out_state = tracker->latest_state;
+    pthread_mutex_unlock(&tracker->state_mutex);
     return DK1_OK;
 }
 
@@ -203,7 +406,10 @@ int dk1_tracker_get_distortion_mesh(
 
 int dk1_tracker_set_gyro_bias(DK1Tracker *tracker, DK1Vector3 bias) {
     if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
+    pthread_mutex_lock(&tracker->state_mutex);
     dk1_estimator_set_gyro_bias(&tracker->estimator, bias);
+    tracker_publish_state_locked(tracker);
+    pthread_mutex_unlock(&tracker->state_mutex);
     return DK1_OK;
 }
 
@@ -212,5 +418,9 @@ int dk1_tracker_set_mag_calibration(
     const DK1MagCalibration *calibration
 ) {
     if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
-    return dk1_estimator_set_mag_calibration(&tracker->estimator, calibration);
+    pthread_mutex_lock(&tracker->state_mutex);
+    int result = dk1_estimator_set_mag_calibration(&tracker->estimator, calibration);
+    tracker_publish_state_locked(tracker);
+    pthread_mutex_unlock(&tracker->state_mutex);
+    return result;
 }

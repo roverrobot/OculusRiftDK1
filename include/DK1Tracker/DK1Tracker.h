@@ -8,7 +8,9 @@
 /**
  * Optional raw report callback.  The library will invoke this callback with
  * a *normalized* 62‑byte DK1 report (ReportID byte 0 included).  The
- * callback must return quickly; no allocations or blocking operations.
+ * callback runs on the tracker worker thread, not the HID callback thread.
+ * It should still return quickly so inference can keep up with incoming
+ * reports.
  */
 typedef void (*DK1RawReportCallback)(
     const uint8_t *data,
@@ -28,6 +30,11 @@ int dk1_tracker_is_open(const DK1Tracker *tracker);
 int dk1_tracker_start(DK1Tracker *tracker);
 void dk1_tracker_stop(DK1Tracker *tracker);
 
+/**
+ * Register an optional parsed sample callback.
+ * The callback runs on the tracker worker thread after the estimator has
+ * consumed the sample and published the latest tracker state.
+ */
 void dk1_tracker_set_sample_callback(
     DK1Tracker *tracker,
     DK1SampleCallback callback,
@@ -60,6 +67,11 @@ int dk1_tracker_get_orientation(
     DK1Quaternion *out_q
 );
 
+/**
+ * Copy the latest inferred tracker state published by the tracker worker.
+ * This is a snapshot at the time of the call; it does not block waiting for
+ * a new sample.
+ */
 int dk1_tracker_get_state(
     DK1Tracker *tracker,
     DK1TrackerState *out_state
