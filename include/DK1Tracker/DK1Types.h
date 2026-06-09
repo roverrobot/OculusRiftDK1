@@ -1,7 +1,18 @@
 #ifndef DK1_TYPES_H
 #define DK1_TYPES_H
 
+#include <stddef.h>
 #include <stdint.h>
+
+typedef enum DK1Eye {
+    DK1_EYE_LEFT = 0,
+    DK1_EYE_RIGHT = 1
+} DK1Eye;
+
+typedef struct DK1Vector2 {
+    double x;
+    double y;
+} DK1Vector2;
 
 typedef struct DK1Vector3 {
     double x;
@@ -37,6 +48,25 @@ typedef struct DK1Config {
     int grid_width;
     int grid_height;
 } DK1Config;
+
+typedef struct DK1DistortionMeshVertex {
+    DK1Vector2 screen_pos_ndc;
+    double timewarp_lerp;
+    double shade;
+    DK1Vector2 tan_eye_angles_r;
+    DK1Vector2 tan_eye_angles_g;
+    DK1Vector2 tan_eye_angles_b;
+} DK1DistortionMeshVertex;
+
+typedef struct DK1DistortionMesh {
+    int grid_width;
+    int grid_height;
+    size_t vertex_count;
+    size_t triangle_count;
+    size_t index_count;
+    const DK1DistortionMeshVertex *vertices;
+    const uint32_t *indices;
+} DK1DistortionMesh;
 
 typedef struct DK1TrackerState {
     int initialized;

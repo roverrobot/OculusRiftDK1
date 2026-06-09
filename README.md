@@ -42,6 +42,12 @@ Example:
 If the file is missing, the library uses `5 5 64 64`. Dial values must be in
 the range `0..10`; grid dimensions must be positive.
 
+The dial values are used at tracker creation to precompute one distortion mesh
+per eye. Each mesh contains full-framebuffer screen positions plus separate
+red, green, and blue tangent-eye-angle sample coordinates. Mesh pointers
+returned by `dk1_tracker_get_distortion_mesh` are owned by the tracker and stay
+valid until `dk1_tracker_destroy`.
+
 ## Distribution
 A `dist` target is provided that stages a clean install of the library, headers, README, and `dk1_dump` example into a versioned directory, then packages it as a gzip-compressed tarball:
 

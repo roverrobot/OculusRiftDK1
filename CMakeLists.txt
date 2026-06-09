@@ -22,6 +22,7 @@ set(LIB_SOURCES
     src/DK1HeadModel.c
     src/DK1RingBuffer.c
     src/DK1Config.c
+    src/DK1Distortion.c
     src/DK1HIDBackend_mac.c
 )
 
@@ -60,6 +61,13 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     add_test(NAME dk1_config COMMAND dk1_config_test)
+
+    add_executable(dk1_distortion_mesh_test tests/test_distortion_mesh.c)
+    target_link_libraries(dk1_distortion_mesh_test PRIVATE DK1Tracker)
+    target_include_directories(dk1_distortion_mesh_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME dk1_distortion_mesh COMMAND dk1_distortion_mesh_test)
 endif()
 
 # ---------------------------------------------------------------------------

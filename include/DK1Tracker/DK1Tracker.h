@@ -70,6 +70,12 @@ int dk1_tracker_get_config(
     DK1Config *out_config
 );
 
+int dk1_tracker_get_distortion_mesh(
+    const DK1Tracker *tracker,
+    DK1Eye eye,
+    const DK1DistortionMesh **out_mesh
+);
+
 int dk1_tracker_set_gyro_bias(
     DK1Tracker *tracker,
     DK1Vector3 bias

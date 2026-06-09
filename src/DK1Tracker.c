@@ -5,6 +5,7 @@
 #include "DK1Estimator.h"
 #include "DK1RingBuffer.h"
 #include "DK1Config.h"
+#include "DK1Distortion.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -15,6 +16,7 @@ struct DK1Tracker {
     DK1Estimator estimator;
     DK1RingBuffer ring_buffer;
     DK1Config config;
+    DK1DistortionMesh distortion_meshes[2];
     
     DK1SampleCallback user_callback;
     void *user_callback_data;
@@ -60,6 +62,27 @@ int dk1_tracker_create(DK1Tracker **out_tracker) {
         free(tracker);
         return config_result;
     }
+
+    int left_mesh_result = dk1_distortion_mesh_build(
+        &tracker->distortion_meshes[DK1_EYE_LEFT],
+        DK1_EYE_LEFT,
+        &tracker->config
+    );
+    if (left_mesh_result != DK1_OK) {
+        free(tracker);
+        return left_mesh_result;
+    }
+
+    int right_mesh_result = dk1_distortion_mesh_build(
+        &tracker->distortion_meshes[DK1_EYE_RIGHT],
+        DK1_EYE_RIGHT,
+        &tracker->config
+    );
+    if (right_mesh_result != DK1_OK) {
+        dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_LEFT]);
+        free(tracker);
+        return right_mesh_result;
+    }
     
     dk1_hid_backend_create_mac(&tracker->backend);
     dk1_estimator_init(&tracker->estimator);
@@ -73,6 +96,8 @@ int dk1_tracker_create(DK1Tracker **out_tracker) {
 void dk1_tracker_destroy(DK1Tracker *tracker) {
     if (!tracker) return;
     dk1_tracker_close(tracker);
+    dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_LEFT]);
+    dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_RIGHT]);
     free(tracker);
 }
 
@@ -160,6 +185,19 @@ int dk1_tracker_get_state(DK1Tracker *tracker, DK1TrackerState *out_state) {
 int dk1_tracker_get_config(const DK1Tracker *tracker, DK1Config *out_config) {
     if (!tracker || !out_config) return DK1_ERROR_INVALID_ARGUMENT;
     *out_config = tracker->config;
+    return DK1_OK;
+}
+
+int dk1_tracker_get_distortion_mesh(
+    const DK1Tracker *tracker,
+    DK1Eye eye,
+    const DK1DistortionMesh **out_mesh
+) {
+    if (!tracker || !out_mesh) return DK1_ERROR_INVALID_ARGUMENT;
+    if (eye != DK1_EYE_LEFT && eye != DK1_EYE_RIGHT) {
+        return DK1_ERROR_INVALID_ARGUMENT;
+    }
+    *out_mesh = &tracker->distortion_meshes[eye];
     return DK1_OK;
 }
 
