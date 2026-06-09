@@ -854,6 +854,42 @@ q_t =
 
 where \(o_{\mathrm{src}}\) and \(a_{\mathrm{src}}\) are the eye-to-source NDC offset and scale used by the SDK.
 
+For the DK1-only generator in this repository, the source transform is derived
+from the visible lens radius \(R_L\), eye relief \(e\), configured IPD \(I\),
+and lens separation \(L_s\):
+
+\[
+a_{\mathrm{src}} =
+\begin{pmatrix}
+e/R_L\\
+e/R_L
+\end{pmatrix}.
+\]
+
+The horizontal source offset is:
+
+\[
+o_{\mathrm{src},x} = \Delta_x/R_L,
+\]
+
+where \(\Delta_x\) is the eye offset to the right relative to the lens center:
+
+\[
+\Delta_x =
+\begin{cases}
+(I-L_s)/2, & \text{right eye},\\
+-(I-L_s)/2, & \text{left eye}.
+\end{cases}
+\]
+
+Thus:
+
+\[
+q_t.x = s_x R_L/e - \Delta_x/e,
+\qquad
+q_t.y = s_y R_L/e.
+\]
+
 Then the SDK inverse-distorts this tangent-eye-angle coordinate to find the distorted tangent-eye-angle coordinate that would land on this source sample:
 
 \[

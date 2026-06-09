@@ -223,6 +223,15 @@ static DK1Vector2 tan_eye_angle_scale(void) {
     };
 }
 
+static double ipd_m_for_config(const DK1Config *config) {
+    return (double)config->ipd_mm * 0.001;
+}
+
+static double eye_offset_to_right_m(DK1Eye eye, double ipd_m) {
+    double offset = (ipd_m - DK1_LENS_SEPARATION_M) * 0.5;
+    return eye == DK1_EYE_RIGHT ? offset : -offset;
+}
+
 static void chroma_scales(const DK1LensConfig *lens, double radius_squared, double scales[3]) {
     double base = lens_scale_radius_squared(lens, radius_squared);
     scales[0] = base * (1.0 + lens->chroma[0] + radius_squared * lens->chroma[1]);
@@ -234,14 +243,18 @@ static double vertex_shade(
     DK1Eye eye,
     DK1Vector2 screen_ndc,
     DK1Vector2 tan_eye_angles_b,
-    double source_scale
+    double source_scale,
+    double source_offset_x
 ) {
     const double fade_texture = 0.3;
     const double fade_texture_inner = 0.075;
     const double fade_screen = 0.075;
     const double fade_floor = 0.25;
 
-    DK1Vector2 source_blue_ndc = vec2_scale(tan_eye_angles_b, source_scale);
+    DK1Vector2 source_blue_ndc = {
+        tan_eye_angles_b.x * source_scale + source_offset_x,
+        tan_eye_angles_b.y * source_scale
+    };
     if (eye == DK1_EYE_RIGHT) {
         source_blue_ndc.x = -source_blue_ndc.x;
     }
@@ -318,13 +331,16 @@ static void build_vertices(
     DK1DistortionMesh *mesh,
     DK1Eye eye,
     const DK1LensConfig *lens,
-    double eye_relief_m
+    double eye_relief_m,
+    double offset_to_right_m
 ) {
     DK1DistortionMeshVertex *vertices = (DK1DistortionMeshVertex *)mesh->vertices;
     DK1Vector2 tan_scale = tan_eye_angle_scale();
     DK1Vector2 lens_center = {lens_center_x_for_eye(eye), lens_center_y()};
     double tan_half_fov = DK1_VISIBLE_LENS_RADIUS_M / eye_relief_m;
     double source_scale = 1.0 / tan_half_fov;
+    double source_offset_x = offset_to_right_m / DK1_VISIBLE_LENS_RADIUS_M;
+    double tan_eye_angle_offset_x = offset_to_right_m / eye_relief_m;
     double eye_offset = eye == DK1_EYE_RIGHT ? 1.0 : 0.0;
 
     for (int y = 0; y <= mesh->grid_height; ++y) {
@@ -336,7 +352,10 @@ static void build_vertices(
                 2.0 * ((double)x / (double)mesh->grid_width) - 1.0,
                 2.0 * ((double)y / (double)mesh->grid_height) - 1.0
             };
-            DK1Vector2 tan_eye_angle = vec2_scale(source_ndc, tan_half_fov);
+            DK1Vector2 tan_eye_angle = {
+                source_ndc.x * tan_half_fov - tan_eye_angle_offset_x,
+                source_ndc.y * tan_half_fov
+            };
 
             double tan_radius = vec2_length(tan_eye_angle);
             double distorted_radius = lens_inverse_distortion_radius(lens, tan_radius);
@@ -374,7 +393,8 @@ static void build_vertices(
                 eye,
                 screen_ndc,
                 vertices[vertex_index].tan_eye_angles_b,
-                source_scale
+                source_scale,
+                source_offset_x
             );
         }
     }
@@ -422,7 +442,7 @@ int dk1_distortion_mesh_build(
     if (eye != DK1_EYE_LEFT && eye != DK1_EYE_RIGHT) {
         return DK1_ERROR_INVALID_ARGUMENT;
     }
-    if (config->grid_width <= 0 || config->grid_height <= 0) {
+    if (config->grid_width <= 0 || config->grid_height <= 0 || config->ipd_mm <= 0) {
         return DK1_ERROR_INVALID_ARGUMENT;
     }
 
@@ -449,10 +469,12 @@ int dk1_distortion_mesh_build(
 
     int dial = eye == DK1_EYE_RIGHT ? config->right_dial : config->left_dial;
     double eye_relief_m = eye_relief_for_dial(dial);
+    double ipd_m = ipd_m_for_config(config);
+    double offset_to_right_m = eye_offset_to_right_m(eye, ipd_m);
     DK1LensConfig lens;
     build_lens_config(eye_relief_m, &lens);
 
-    build_vertices(&result, eye, &lens, eye_relief_m);
+    build_vertices(&result, eye, &lens, eye_relief_m, offset_to_right_m);
     build_indices(&result);
 
     dk1_distortion_mesh_destroy(mesh);

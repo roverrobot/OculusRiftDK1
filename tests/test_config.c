@@ -23,7 +23,8 @@ static void check_config(
     int left_dial,
     int right_dial,
     int grid_width,
-    int grid_height
+    int grid_height,
+    int ipd_mm
 ) {
     char name[128];
     snprintf(name, sizeof(name), "%s.left_dial", prefix);
@@ -34,6 +35,8 @@ static void check_config(
     check_int_equal(name, config->grid_width, grid_width);
     snprintf(name, sizeof(name), "%s.grid_height", prefix);
     check_int_equal(name, config->grid_height, grid_height);
+    snprintf(name, sizeof(name), "%s.ipd_mm", prefix);
+    check_int_equal(name, config->ipd_mm, ipd_mm);
 }
 
 static int write_text_file(const char *path, const char *text) {
@@ -63,22 +66,22 @@ static int make_config_dir(char *buffer, size_t buffer_size, const char *home) {
 static void test_defaults(void) {
     DK1Config config;
     dk1_config_set_defaults(&config);
-    check_config("defaults", &config, 5, 5, 64, 64);
+    check_config("defaults", &config, 5, 5, 64, 64, 64);
     check_int_equal("defaults_validate", dk1_config_validate(&config), DK1_OK);
 }
 
 static void test_missing_file_uses_defaults(const char *home) {
-    DK1Config config = {0, 0, 0, 0};
+    DK1Config config = {0, 0, 0, 0, 0};
 
     check_int_equal("setenv_missing", setenv("HOME", home, 1), 0);
     check_int_equal("missing_load", dk1_config_load_default(&config), DK1_OK);
-    check_config("missing_load", &config, 5, 5, 64, 64);
+    check_config("missing_load", &config, 5, 5, 64, 64, 64);
 }
 
-static void test_valid_file(const char *home) {
+static void test_legacy_valid_file(const char *home) {
     char dir_path[512];
     char config_path[512];
-    DK1Config config = {0, 0, 0, 0};
+    DK1Config config = {0, 0, 0, 0, 0};
 
     if (!make_config_dir(dir_path, sizeof(dir_path), home)) {
         fprintf(stderr, "failed to make config dir\n");
@@ -93,8 +96,24 @@ static void test_valid_file(const char *home) {
     }
 
     check_int_equal("setenv_valid", setenv("HOME", home, 1), 0);
-    check_int_equal("valid_load", dk1_config_load_default(&config), DK1_OK);
-    check_config("valid_load", &config, 2, 8, 32, 48);
+    check_int_equal("legacy_valid_load", dk1_config_load_default(&config), DK1_OK);
+    check_config("legacy_valid_load", &config, 2, 8, 32, 48, 64);
+}
+
+static void test_valid_file(const char *home) {
+    char config_path[512];
+    DK1Config config = {0, 0, 0, 0, 0};
+
+    if (!make_config_path(config_path, sizeof(config_path), home) ||
+        !write_text_file(config_path, "2 8 32 48 67\n")) {
+        fprintf(stderr, "failed to write valid config\n");
+        failures++;
+        return;
+    }
+
+    check_int_equal("setenv_valid_ipd", setenv("HOME", home, 1), 0);
+    check_int_equal("valid_ipd_load", dk1_config_load_default(&config), DK1_OK);
+    check_config("valid_ipd_load", &config, 2, 8, 32, 48, 67);
 }
 
 static void test_invalid_file(const char *home) {
@@ -139,15 +158,37 @@ static void test_invalid_file(const char *home) {
         dk1_config_load_path(config_path, &config),
         DK1_ERROR_PARSE
     );
+
+    if (!write_text_file(config_path, "5 5 64 64 0\n")) {
+        fprintf(stderr, "failed to write invalid IPD config\n");
+        failures++;
+        return;
+    }
+    check_int_equal(
+        "invalid_ipd",
+        dk1_config_load_path(config_path, &config),
+        DK1_ERROR_PARSE
+    );
+
+    if (!write_text_file(config_path, "5 5 64 64 64 1\n")) {
+        fprintf(stderr, "failed to write extra config\n");
+        failures++;
+        return;
+    }
+    check_int_equal(
+        "extra_config",
+        dk1_config_load_path(config_path, &config),
+        DK1_ERROR_PARSE
+    );
 }
 
 static void test_tracker_loads_config(const char *home) {
     char config_path[512];
     DK1Tracker *tracker = NULL;
-    DK1Config config = {0, 0, 0, 0};
+    DK1Config config = {0, 0, 0, 0, 0};
 
     if (!make_config_path(config_path, sizeof(config_path), home) ||
-        !write_text_file(config_path, "3 7 80 96\n")) {
+        !write_text_file(config_path, "3 7 80 96 66\n")) {
         fprintf(stderr, "failed to write tracker config\n");
         failures++;
         return;
@@ -155,7 +196,7 @@ static void test_tracker_loads_config(const char *home) {
 
     check_int_equal("tracker_create", dk1_tracker_create(&tracker), DK1_OK);
     check_int_equal("tracker_get_config", dk1_tracker_get_config(tracker, &config), DK1_OK);
-    check_config("tracker_config", &config, 3, 7, 80, 96);
+    check_config("tracker_config", &config, 3, 7, 80, 96, 66);
     dk1_tracker_destroy(tracker);
 }
 
@@ -169,6 +210,7 @@ int main(void) {
 
     test_defaults();
     test_missing_file_uses_defaults(home);
+    test_legacy_valid_file(home);
     test_valid_file(home);
     test_invalid_file(home);
     test_tracker_loads_config(home);

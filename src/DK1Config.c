@@ -7,6 +7,8 @@
 
 #define DK1_CONFIG_GRID_MIN 1
 #define DK1_CONFIG_GRID_MAX 1024
+#define DK1_CONFIG_IPD_MM_MIN 40
+#define DK1_CONFIG_IPD_MM_MAX 90
 
 void dk1_config_set_defaults(DK1Config *config) {
     if (!config) return;
@@ -14,6 +16,7 @@ void dk1_config_set_defaults(DK1Config *config) {
     config->right_dial = DK1_DEFAULT_RIGHT_DIAL;
     config->grid_width = DK1_DEFAULT_GRID_WIDTH;
     config->grid_height = DK1_DEFAULT_GRID_HEIGHT;
+    config->ipd_mm = DK1_DEFAULT_IPD_MM;
 }
 
 int dk1_config_validate(const DK1Config *config) {
@@ -30,6 +33,10 @@ int dk1_config_validate(const DK1Config *config) {
     }
     if (config->grid_height < DK1_CONFIG_GRID_MIN ||
         config->grid_height > DK1_CONFIG_GRID_MAX) {
+        return DK1_ERROR_PARSE;
+    }
+    if (config->ipd_mm < DK1_CONFIG_IPD_MM_MIN ||
+        config->ipd_mm > DK1_CONFIG_IPD_MM_MAX) {
         return DK1_ERROR_PARSE;
     }
     return DK1_OK;
@@ -68,11 +75,12 @@ int dk1_config_load_path(const char *path, DK1Config *out_config) {
     int extra = 0;
     int count = fscanf(
         file,
-        " %d %d %d %d %d",
+        " %d %d %d %d %d %d",
         &config.left_dial,
         &config.right_dial,
         &config.grid_width,
         &config.grid_height,
+        &config.ipd_mm,
         &extra
     );
     int close_result = fclose(file);
@@ -80,7 +88,7 @@ int dk1_config_load_path(const char *path, DK1Config *out_config) {
     if (close_result != 0) {
         return DK1_ERROR_IO;
     }
-    if (count != 4) {
+    if (count != 4 && count != 5) {
         return DK1_ERROR_PARSE;
     }
 

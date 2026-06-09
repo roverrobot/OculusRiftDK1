@@ -39,7 +39,8 @@ enum {
     DK1_DEFAULT_LEFT_DIAL = 5,
     DK1_DEFAULT_RIGHT_DIAL = 5,
     DK1_DEFAULT_GRID_WIDTH = 64,
-    DK1_DEFAULT_GRID_HEIGHT = 64
+    DK1_DEFAULT_GRID_HEIGHT = 64,
+    DK1_DEFAULT_IPD_MM = 64
 };
 
 typedef struct DK1Config {
@@ -47,6 +48,7 @@ typedef struct DK1Config {
     int right_dial;
     int grid_width;
     int grid_height;
+    int ipd_mm;
 } DK1Config;
 
 typedef struct DK1DistortionMeshVertex {
