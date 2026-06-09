@@ -1,3 +1,5 @@
 build/
 .venv/
 probe/
+*.csv
+.DS_Store
