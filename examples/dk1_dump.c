@@ -11,9 +11,14 @@
 #include <stdint.h>
 #include <time.h>
 #include <math.h>
+#include <stdatomic.h>
 #include "../src/DK1Parser.h"
 
-static volatile int keep_running = 1;
+#define REPORT_QUEUE_CAPACITY 8192
+#define REPORT_QUEUE_DATA_LEN 64
+#define REPORT_DRAIN_BATCH 256
+
+static volatile sig_atomic_t keep_running = 1;
 // By default, **do not** dump raw reports.  Users can enable with
 // `--raw`.  The `--no-raw` flag keeps the old behaviour (no raw
 // dumping).  The logic that sets the flag was updated accordingly.
@@ -30,6 +35,20 @@ static FILE *csv_output = NULL;
 static double run_seconds = 0.0;
 static double stationary_seconds = 10.0;
 static double program_start_host_ts = 0.0;
+
+typedef struct QueuedReport {
+    uint8_t data[REPORT_QUEUE_DATA_LEN];
+    size_t len;
+    double host_ts;
+} QueuedReport;
+
+typedef struct ReportQueue {
+    QueuedReport entries[REPORT_QUEUE_CAPACITY];
+    atomic_size_t head;
+    atomic_size_t tail;
+    atomic_uint_fast64_t dropped_count;
+    int initialized;
+} ReportQueue;
 
 typedef struct RunningStats {
     uint64_t count;
@@ -95,6 +114,7 @@ typedef struct StationaryStats {
 
 static SummaryStats summary_stats;
 static StationaryStats stationary_stats;
+static ReportQueue report_queue;
 
 static FILE *text_stream(void) {
     return text_output ? text_output : stdout;
@@ -104,6 +124,64 @@ static double monotonic_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+
+static int report_queue_init(ReportQueue *queue) {
+    memset(queue, 0, sizeof(*queue));
+    atomic_init(&queue->head, 0);
+    atomic_init(&queue->tail, 0);
+    atomic_init(&queue->dropped_count, 0);
+    queue->initialized = 1;
+    return 1;
+}
+
+static void report_queue_destroy(ReportQueue *queue) {
+    if (!queue->initialized) return;
+    queue->initialized = 0;
+}
+
+static void report_queue_push(ReportQueue *queue, const uint8_t *data, size_t len, double host_ts) {
+    if (!queue->initialized || !data) return;
+    if (len > REPORT_QUEUE_DATA_LEN) {
+        len = REPORT_QUEUE_DATA_LEN;
+    }
+
+    size_t tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    size_t next_tail = (tail + 1) % REPORT_QUEUE_CAPACITY;
+    size_t head = atomic_load_explicit(&queue->head, memory_order_acquire);
+    if (next_tail == head) {
+        atomic_fetch_add_explicit(&queue->dropped_count, 1, memory_order_relaxed);
+        return;
+    }
+
+    QueuedReport *entry = &queue->entries[tail];
+    memcpy(entry->data, data, len);
+    entry->len = len;
+    entry->host_ts = host_ts;
+    atomic_store_explicit(&queue->tail, next_tail, memory_order_release);
+}
+
+static int report_queue_pop(ReportQueue *queue, QueuedReport *out_report) {
+    if (!queue->initialized || !out_report) return 0;
+
+    size_t head = atomic_load_explicit(&queue->head, memory_order_relaxed);
+    size_t tail = atomic_load_explicit(&queue->tail, memory_order_acquire);
+    if (head == tail) {
+        return 0;
+    }
+
+    *out_report = queue->entries[head];
+    atomic_store_explicit(
+        &queue->head,
+        (head + 1) % REPORT_QUEUE_CAPACITY,
+        memory_order_release
+    );
+    return 1;
+}
+
+static uint64_t report_queue_dropped_count(ReportQueue *queue) {
+    if (!queue->initialized) return 0;
+    return atomic_load_explicit(&queue->dropped_count, memory_order_relaxed);
 }
 
 // Helper to read little‑endian u16
@@ -181,14 +259,12 @@ static void update_double_minmax(double value, double *min_value, double *max_va
     if (value > *max_value) *max_value = value;
 }
 
-static void update_summary_report(const uint8_t *data, size_t len) {
+static void update_summary_report(const uint8_t *data, size_t len, int parse_status) {
     if (len < 62 || data[0] != 1) return;
     summary_stats.report_count++;
     summary_stats.sample_count_hist[data[1]]++;
 
-    DK1Sample samples[3];
-    size_t parsed_count = 0;
-    if (dk1_parse_input_report(data, len, samples, 3, &parsed_count) != DK1_OK) {
+    if (parse_status != DK1_OK) {
         summary_stats.parse_failure_count++;
     }
 }
@@ -355,7 +431,14 @@ static void print_stationary_estimate(void) {
     }
 }
 
-static void update_stationary(const uint8_t *data, size_t len, double host_ts) {
+static void update_stationary(
+    const uint8_t *data,
+    size_t len,
+    const DK1Sample *samples,
+    size_t parsed_count,
+    int parse_status,
+    double host_ts
+) {
     if (len < 62 || data[0] != 1) return;
 
     if (stationary_stats.report_count == 0) {
@@ -364,9 +447,7 @@ static void update_stationary(const uint8_t *data, size_t len, double host_ts) {
     stationary_stats.last_host_ts = host_ts;
     stationary_stats.report_count++;
 
-    DK1Sample samples[3];
-    size_t parsed_count = 0;
-    if (dk1_parse_input_report(data, len, samples, 3, &parsed_count) == DK1_OK) {
+    if (parse_status == DK1_OK) {
         for (size_t i = 0; i < parsed_count; ++i) {
             const DK1Sample *s = &samples[i];
             vector_mean_update(&stationary_stats.accel, s->accel);
@@ -399,11 +480,14 @@ static void print_block_bytes(const uint8_t *p) {
     }
 }
 
-static void print_decode_blocks(const uint8_t *data, size_t len) {
+static void print_decode_blocks(
+    const uint8_t *data,
+    size_t len,
+    const DK1Sample *samples,
+    size_t parsed_count,
+    int parse_status
+) {
     FILE *out = text_stream();
-    DK1Sample samples[3];
-    size_t parsed_count = 0;
-    int parse_status = dk1_parse_input_report(data, len, samples, 3, &parsed_count);
 
     if (len < 56) {
         fprintf(out, "decode-blocks: report too short for 16-byte motion blocks (len=%zu)\n", len);
@@ -435,14 +519,8 @@ static void print_decode_blocks(const uint8_t *data, size_t len) {
     }
 }
 
-static void write_csv_report(const uint8_t *data, size_t len, double host_ts) {
+static void write_csv_samples(const DK1Sample *samples, size_t parsed_count, double host_ts) {
     if (!csv_output) return;
-
-    DK1Sample samples[3];
-    size_t parsed_count = 0;
-    if (dk1_parse_input_report(data, len, samples, 3, &parsed_count) != DK1_OK) {
-        return;
-    }
 
     for (size_t i = 0; i < parsed_count; ++i) {
         const DK1Sample *s = &samples[i];
@@ -457,65 +535,109 @@ static void write_csv_report(const uint8_t *data, size_t len, double host_ts) {
     }
 }
 
-static void raw_print_cb(const uint8_t *data, size_t len, void *ud) {
-    (void)ud;
-    double host_ts = monotonic_seconds();
+static void print_raw_report(const uint8_t *data, size_t len, double host_ts) {
     FILE *out = text_stream();
-    if (raw_enabled) {
-        if (len >= 62 && data[0] == 1) {
-            uint16_t sample_count = data[1];
-            uint16_t timestamp = read_u16_le(data + 2);
-            uint16_t last_cmd = read_u16_le(data + 4);
-            int16_t temp_raw = read_i16_le(data + 6);
-            double temp_c = temp_raw / 100.0;
-            int16_t magx = read_i16_le(data + 56);
-            int16_t magy = read_i16_le(data + 58);
-            int16_t magz = read_i16_le(data + 60);
-            fprintf(out, "raw[%zu] host=%.6f id=%u count=%u ts=%u last=%u temp=%.2fC mag=(%d,%d,%d): ",
-                    len, host_ts, data[0], sample_count, timestamp, last_cmd, temp_c, magx, magy, magz);
-        } else {
-            fprintf(out, "raw[%zu] host=%.6f unrecognized: ", len, host_ts);
-        }
-        for (size_t i = 0; i < len; ++i) {
-            fprintf(out, "%02X", data[i]);
-            if (i + 1 < len) fprintf(out, " ");
-        }
-        fprintf(out, "\n");
+    if (len >= 62 && data[0] == 1) {
+        uint16_t sample_count = data[1];
+        uint16_t timestamp = read_u16_le(data + 2);
+        uint16_t last_cmd = read_u16_le(data + 4);
+        int16_t temp_raw = read_i16_le(data + 6);
+        double temp_c = temp_raw / 100.0;
+        int16_t magx = read_i16_le(data + 56);
+        int16_t magy = read_i16_le(data + 58);
+        int16_t magz = read_i16_le(data + 60);
+        fprintf(out, "raw[%zu] host=%.6f id=%u count=%u ts=%u last=%u temp=%.2fC mag=(%d,%d,%d): ",
+                len, host_ts, data[0], sample_count, timestamp, last_cmd, temp_c, magx, magy, magz);
+    } else {
+        fprintf(out, "raw[%zu] host=%.6f unrecognized: ", len, host_ts);
     }
+    for (size_t i = 0; i < len; ++i) {
+        fprintf(out, "%02X", data[i]);
+        if (i + 1 < len) fprintf(out, " ");
+    }
+    fprintf(out, "\n");
+}
 
-    if (decode_blocks_enabled) {
-        print_decode_blocks(data, len);
-    }
-
-    if (summary_enabled) {
-        update_summary_report(data, len);
-    }
-
-    if (csv_enabled) {
-        write_csv_report(data, len, host_ts);
-    }
-
-    if (stationary_enabled) {
-        update_stationary(data, len, host_ts);
-    }
+static void enqueue_report_cb(const uint8_t *data, size_t len, void *ud) {
+    (void)ud;
+    report_queue_push(&report_queue, data, len, monotonic_seconds());
 }
 
 static void handle_sigint(int sig) {
+    (void)sig;
     keep_running = 0;
 }
 
-static void on_sample(const DK1Sample *sample, void *user_data) {
-    (void)user_data;
-    if (summary_enabled) {
-        update_summary_sample(sample, monotonic_seconds());
-    }
-    if (!sample_print_enabled) return;
+static void print_sample(const DK1Sample *sample) {
     fprintf(text_stream(), "S: %u | Acc: %.2f %.2f %.2f | Gyro: %.2f %.2f %.2f | Mag: %.2f %.2f %.2f | Temp: %.2f C\n",
             sample->timestamp,
             sample->accel.x, sample->accel.y, sample->accel.z,
             sample->gyro.x, sample->gyro.y, sample->gyro.z,
             sample->mag.x, sample->mag.y, sample->mag.z,
             sample->temperature_c);
+}
+
+static void process_queued_report(const QueuedReport *report) {
+    DK1Sample samples[3];
+    size_t parsed_count = 0;
+    int parse_status = dk1_parse_input_report(
+        report->data,
+        report->len,
+        samples,
+        3,
+        &parsed_count
+    );
+
+    if (raw_enabled) {
+        print_raw_report(report->data, report->len, report->host_ts);
+    }
+
+    if (decode_blocks_enabled) {
+        print_decode_blocks(report->data, report->len, samples, parsed_count, parse_status);
+    }
+
+    if (summary_enabled) {
+        update_summary_report(report->data, report->len, parse_status);
+    }
+
+    if (parse_status == DK1_OK) {
+        for (size_t i = 0; i < parsed_count; ++i) {
+            if (summary_enabled) {
+                update_summary_sample(&samples[i], report->host_ts);
+            }
+            if (sample_print_enabled) {
+                print_sample(&samples[i]);
+            }
+        }
+
+        if (csv_enabled) {
+            write_csv_samples(samples, parsed_count, report->host_ts);
+        }
+    }
+
+    if (stationary_enabled) {
+        update_stationary(
+            report->data,
+            report->len,
+            samples,
+            parsed_count,
+            parse_status,
+            report->host_ts
+        );
+    }
+}
+
+static void drain_report_queue(size_t max_reports, int stop_when_requested) {
+    QueuedReport report;
+    size_t drained = 0;
+    while ((max_reports == 0 || drained < max_reports) &&
+           report_queue_pop(&report_queue, &report)) {
+        process_queued_report(&report);
+        drained++;
+        if (stop_when_requested && !keep_running) {
+            break;
+        }
+    }
 }
 
 static int parse_positive_double(const char *text, double *out_value) {
@@ -634,9 +756,16 @@ int main(int argc, char *argv[]) {
         text_output = stdout;
     }
 
+    if (!report_queue_init(&report_queue)) {
+        fprintf(stderr, "Failed to initialize report queue\n");
+        if (csv_output && csv_output != stdout) fclose(csv_output);
+        return 1;
+    }
+
     fprintf(text_stream(), "Creating tracker instance...\n");
     if (dk1_tracker_create(&tracker) != DK1_OK) {
         fprintf(stderr, "Failed to create tracker\n");
+        report_queue_destroy(&report_queue);
         if (csv_output && csv_output != stdout) fclose(csv_output);
         return 1;
     }
@@ -644,20 +773,19 @@ int main(int argc, char *argv[]) {
     if (dk1_tracker_open(tracker) != DK1_OK) {
         fprintf(stderr, "Failed to open tracker\n");
         dk1_tracker_destroy(tracker);
+        report_queue_destroy(&report_queue);
         if (csv_output && csv_output != stdout) fclose(csv_output);
         return 1;
     }
     fprintf(text_stream(), "Device opened successfully.\n");
     dk1_tracker_set_keepalive(tracker, 10000);
-    dk1_tracker_set_sample_callback(tracker, on_sample, NULL);
-    if (raw_enabled || decode_blocks_enabled || summary_enabled || csv_enabled || stationary_enabled) {
-        dk1_tracker_set_raw_report_callback(tracker, raw_print_cb, NULL);
-    }
+    dk1_tracker_set_raw_report_callback(tracker, enqueue_report_cb, NULL);
     program_start_host_ts = monotonic_seconds();
     if (dk1_tracker_start(tracker) != DK1_OK) {
         fprintf(stderr, "Failed to start tracker\n");
         dk1_tracker_close(tracker);
         dk1_tracker_destroy(tracker);
+        report_queue_destroy(&report_queue);
         if (csv_output && csv_output != stdout) fclose(csv_output);
         return 1;
     }
@@ -667,13 +795,27 @@ int main(int argc, char *argv[]) {
         fprintf(text_stream(), "Tracking started. Press Ctrl-C to stop.\n");
     }
     while (keep_running) {
+        drain_report_queue(REPORT_DRAIN_BATCH, 1);
+        if (!keep_running) {
+            break;
+        }
         if (use_time_limit && monotonic_seconds() - program_start_host_ts >= run_seconds) {
             break;
         }
-        usleep(10000);
+        usleep(1000);
     }
     fprintf(text_stream(), "\nStopping...\n");
+    int drain_after_stop = keep_running && !stationary_enabled;
     dk1_tracker_stop(tracker);
+    if (drain_after_stop) {
+        drain_report_queue(0, 0);
+    }
+    uint64_t dropped_reports = report_queue_dropped_count(&report_queue);
+    if (dropped_reports > 0) {
+        fprintf(text_stream(),
+                "Warning: dropped %llu HID reports because the dumper queue filled.\n",
+                (unsigned long long)dropped_reports);
+    }
     if (summary_enabled) {
         print_summary();
     }
@@ -682,6 +824,7 @@ int main(int argc, char *argv[]) {
     }
     dk1_tracker_close(tracker);
     dk1_tracker_destroy(tracker);
+    report_queue_destroy(&report_queue);
     if (csv_output && csv_output != stdout) {
         fclose(csv_output);
     }
