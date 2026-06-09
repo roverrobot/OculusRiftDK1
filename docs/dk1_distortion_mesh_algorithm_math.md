@@ -1053,6 +1053,30 @@ The `Shade` value is a vignette factor. In the SDK mesh generator it combines:
 - a fade near the DK1 lens border,
 - a fade near the source render-target edge.
 
+### 16.1 Metal shader layout
+
+The repository's Metal distortion shader consumes a packed float version of the
+mesh vertex:
+
+1. `float2 ScreenPosNDC`,
+2. `float TimewarpLerp`,
+3. `float Shade`,
+4. `float2 TanEyeAnglesR`,
+5. `float2 TanEyeAnglesG`,
+6. `float2 TanEyeAnglesB`.
+
+The vertex function writes `ScreenPosNDC` directly to clip space. It maps each
+per-channel tangent-eye-angle coordinate to source texture UV using:
+
+\[
+u_C = q_C \odot s_{\mathrm{uv}} + o_{\mathrm{uv}},
+\qquad C \in \{R,G,B\}.
+\]
+
+The fragment function samples the source eye texture at \(u_R\), \(u_G\), and
+\(u_B\), takes the corresponding color channel from each sample, then applies
+`Shade`.
+
 ---
 
 ## 17. Complete SDK-style mathematical flow

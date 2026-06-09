@@ -23,6 +23,7 @@ set(LIB_SOURCES
     src/DK1RingBuffer.c
     src/DK1Config.c
     src/DK1Distortion.c
+    src/DK1MetalDistortion.c
     src/DK1HIDBackend_mac.c
 )
 
@@ -68,6 +69,57 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     add_test(NAME dk1_distortion_mesh COMMAND dk1_distortion_mesh_test)
+
+    add_executable(dk1_metal_distortion_test tests/test_metal_distortion.c)
+    target_link_libraries(dk1_metal_distortion_test PRIVATE DK1Tracker)
+    target_include_directories(dk1_metal_distortion_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME dk1_metal_distortion COMMAND dk1_metal_distortion_test)
+endif()
+
+option(DK1_BUILD_METAL_LIBRARY "Build the DK1 Metal distortion shader library" ON)
+set(DK1_METAL_SHADER_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/shaders/DK1Distortion.metal")
+set(DK1_HAVE_METAL_TOOLCHAIN OFF)
+
+find_program(XCRUN_EXECUTABLE xcrun)
+if(DK1_BUILD_METAL_LIBRARY AND XCRUN_EXECUTABLE)
+    execute_process(
+        COMMAND "${XCRUN_EXECUTABLE}" -sdk macosx metal -v
+        RESULT_VARIABLE DK1_METAL_CHECK_RESULT
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+    if(DK1_METAL_CHECK_RESULT EQUAL 0)
+        set(DK1_HAVE_METAL_TOOLCHAIN ON)
+    else()
+        message(STATUS "Metal compiler not usable; skipping DK1Distortion.metallib build")
+    endif()
+elseif(DK1_BUILD_METAL_LIBRARY)
+    message(STATUS "xcrun not found; skipping DK1Distortion.metallib build")
+endif()
+
+if(DK1_HAVE_METAL_TOOLCHAIN)
+    set(DK1_METAL_AIR "${CMAKE_CURRENT_BINARY_DIR}/DK1Distortion.air")
+    set(DK1_METAL_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/DK1Distortion.metallib")
+
+    add_custom_command(
+        OUTPUT "${DK1_METAL_AIR}"
+        COMMAND "${XCRUN_EXECUTABLE}" -sdk macosx metal
+                -c "${DK1_METAL_SHADER_SOURCE}"
+                -o "${DK1_METAL_AIR}"
+        DEPENDS "${DK1_METAL_SHADER_SOURCE}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${DK1_METAL_LIBRARY}"
+        COMMAND "${XCRUN_EXECUTABLE}" -sdk macosx metallib
+                "${DK1_METAL_AIR}"
+                -o "${DK1_METAL_LIBRARY}"
+        DEPENDS "${DK1_METAL_AIR}"
+        VERBATIM
+    )
+    add_custom_target(DK1DistortionMetallib ALL DEPENDS "${DK1_METAL_LIBRARY}")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -85,6 +137,14 @@ install(TARGETS dk1_dump
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(FILES shaders/DK1Distortion.metal
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/shaders
+)
+if(DK1_HAVE_METAL_TOOLCHAIN)
+    install(FILES "${DK1_METAL_LIBRARY}"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}
+    )
+endif()
 
 # "dist" target: produce a pure source tarball (no compiled artifacts).
 # The staged layout mirrors the project root, e.g.
@@ -110,6 +170,7 @@ set(DIST_SOURCE_DIRS
     examples
     docs
     include
+    shaders
 )
 
 # Build the per-file copy commands and the per-directory copy commands

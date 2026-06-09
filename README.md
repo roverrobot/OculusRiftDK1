@@ -50,6 +50,30 @@ plus separate red, green, and blue tangent-eye-angle sample coordinates. Mesh
 pointers returned by `dk1_tracker_get_distortion_mesh` are owned by the tracker
 and stay valid until `dk1_tracker_destroy`.
 
+## Metal Distortion Shader
+The build produces `build/DK1Distortion.metallib` when the Xcode Metal command
+line toolchain is available. If CMake reports that the Metal compiler is not
+usable, install it with:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+```
+
+The shader entry points are:
+
+```text
+dk1_distortion_vertex
+dk1_distortion_fragment
+```
+
+Use `dk1_metal_distortion_copy_vertices` to pack a `DK1DistortionMesh` into the
+float vertex layout consumed by the shader. Use
+`dk1_metal_distortion_make_eye_texture_uniforms` to create the tangent-eye-angle
+to source-texture UV transform for a single eye texture. Draw each eye mesh as
+an indexed triangle list, binding the packed vertex buffer at Metal buffer slot
+0, `DK1MetalDistortionUniforms` at slot 1, and the rendered eye texture at
+texture slot 0.
+
 ## Distribution
 A `dist` target is provided that stages a clean install of the library, headers, README, and `dk1_dump` example into a versioned directory, then packages it as a gzip-compressed tarball:
 
