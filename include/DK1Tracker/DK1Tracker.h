@@ -98,4 +98,22 @@ int dk1_tracker_set_mag_calibration(
     const DK1MagCalibration *calibration
 );
 
+/**
+ * Configure Gamma head/neck geometry and pivot integration guards.
+ * A recent real-data fit can be represented with h_m ~= 0.0726 and
+ * ell_m ~= 0.1588, but callers should treat these as calibration values.
+ */
+int dk1_tracker_set_head_neck_config(
+    DK1Tracker *tracker,
+    const DK1HeadNeckConfig *config
+);
+
+/**
+ * Copy the active head/neck and pivot-integration configuration.
+ */
+int dk1_tracker_get_head_neck_config(
+    DK1Tracker *tracker,
+    DK1HeadNeckConfig *out_config
+);
+
 #endif // DK1_TRACKER_H

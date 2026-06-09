@@ -35,6 +35,17 @@ typedef struct DK1MagCalibration {
     uint32_t correction_interval_samples;
 } DK1MagCalibration;
 
+/* Gamma head/neck geometry and pivot-integration settings.
+ * The neck-to-tracker vector is (0, h_m, -ell_m) in the body frame. */
+typedef struct DK1HeadNeckConfig {
+    double h_m;
+    double ell_m;
+    double ipd_m;
+    double pivot_damping_per_second;
+    double max_dt_s;
+    uint8_t max_report_sample_count;
+} DK1HeadNeckConfig;
+
 enum {
     DK1_DEFAULT_LEFT_DIAL = 5,
     DK1_DEFAULT_RIGHT_DIAL = 5,
@@ -90,6 +101,11 @@ typedef struct DK1TrackerState {
     DK1Vector3 accel_residual;
     DK1Vector3 pivot_accel_body;
     DK1Vector3 pivot_accel_world;
+    /* Diagnostic neck-pivot translation inferred by double-integrating
+     * pivot_accel_world. This is sensitive to timing quality. */
+    DK1Vector3 pivot_velocity_world;
+    DK1Vector3 pivot_position_world;
+    int pivot_position_reliable;
 
     DK1Vector3 mag_calibrated;
     DK1Vector3 expected_north_world;
@@ -100,6 +116,21 @@ typedef struct DK1TrackerState {
     double mag_correction_rate;
     uint32_t mag_correction_interval_samples;
     uint64_t mag_correction_update_count;
+
+    /* Timing-quality diagnostics for pivot inference and report grouping. */
+    double pivot_damping_per_second;
+    double timing_max_dt_s;
+    double timing_last_raw_dt_s;
+    double timing_max_raw_dt_s;
+    uint8_t timing_last_report_sample_count;
+    uint8_t timing_max_report_sample_count;
+    uint64_t timing_report_group_count;
+    uint64_t timing_repeated_group_count;
+    uint64_t timing_oversized_group_count;
+    uint64_t timing_capped_dt_count;
+    uint64_t timing_nonpositive_dt_count;
+    uint64_t pivot_integration_skipped_count;
+    uint64_t report_queue_dropped_count;
 } DK1TrackerState;
 
 typedef struct DK1Sample {

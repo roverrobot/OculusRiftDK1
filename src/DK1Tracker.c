@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 #define DK1_TRACKER_REPORT_QUEUE_CAPACITY 8192
 #define DK1_TRACKER_REPORT_MAX_LEN 64
@@ -37,7 +38,7 @@ struct DK1Tracker {
     size_t report_queue_head;
     size_t report_queue_tail;
     size_t report_queue_count;
-    uint64_t dropped_report_count;
+    atomic_uint_fast64_t dropped_report_count;
 
     pthread_t worker_thread;
     int worker_thread_running;
@@ -89,6 +90,8 @@ static int tracker_init_sync(DK1Tracker *tracker) {
 
 static void tracker_publish_state_locked(DK1Tracker *tracker) {
     dk1_estimator_get_state(&tracker->estimator, &tracker->latest_state);
+    tracker->latest_state.report_queue_dropped_count =
+        atomic_load_explicit(&tracker->dropped_report_count, memory_order_relaxed);
 }
 
 static void tracker_queue_report(DK1Tracker *tracker, const uint8_t *data, size_t length) {
@@ -106,7 +109,11 @@ static void tracker_queue_report(DK1Tracker *tracker, const uint8_t *data, size_
         tracker->report_queue_head =
             (tracker->report_queue_head + 1) % DK1_TRACKER_REPORT_QUEUE_CAPACITY;
         tracker->report_queue_count--;
-        tracker->dropped_report_count++;
+        atomic_fetch_add_explicit(
+            &tracker->dropped_report_count,
+            1,
+            memory_order_relaxed
+        );
     }
 
     DK1QueuedReport *entry = &tracker->report_queue[tracker->report_queue_tail];
@@ -225,6 +232,7 @@ int dk1_tracker_create(DK1Tracker **out_tracker) {
     dk1_hid_backend_create_mac(&tracker->backend);
     dk1_estimator_init(&tracker->estimator);
     dk1_ring_buffer_init(&tracker->ring_buffer);
+    atomic_init(&tracker->dropped_report_count, 0);
     int sync_result = tracker_init_sync(tracker);
     if (sync_result != DK1_OK) {
         dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_LEFT]);
@@ -279,7 +287,7 @@ int dk1_tracker_start(DK1Tracker *tracker) {
     tracker->report_queue_head = 0;
     tracker->report_queue_tail = 0;
     tracker->report_queue_count = 0;
-    tracker->dropped_report_count = 0;
+    atomic_store_explicit(&tracker->dropped_report_count, 0, memory_order_relaxed);
     tracker->worker_thread_running = 1;
     pthread_mutex_unlock(&tracker->report_mutex);
 
@@ -423,4 +431,27 @@ int dk1_tracker_set_mag_calibration(
     tracker_publish_state_locked(tracker);
     pthread_mutex_unlock(&tracker->state_mutex);
     return result;
+}
+
+int dk1_tracker_set_head_neck_config(
+    DK1Tracker *tracker,
+    const DK1HeadNeckConfig *config
+) {
+    if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
+    pthread_mutex_lock(&tracker->state_mutex);
+    int result = dk1_estimator_set_head_neck_config(&tracker->estimator, config);
+    tracker_publish_state_locked(tracker);
+    pthread_mutex_unlock(&tracker->state_mutex);
+    return result;
+}
+
+int dk1_tracker_get_head_neck_config(
+    DK1Tracker *tracker,
+    DK1HeadNeckConfig *out_config
+) {
+    if (!tracker || !out_config) return DK1_ERROR_INVALID_ARGUMENT;
+    pthread_mutex_lock(&tracker->state_mutex);
+    dk1_estimator_get_head_neck_config(&tracker->estimator, out_config);
+    pthread_mutex_unlock(&tracker->state_mutex);
+    return DK1_OK;
 }
