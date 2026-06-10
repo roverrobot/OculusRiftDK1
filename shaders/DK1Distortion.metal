@@ -25,7 +25,7 @@ struct DK1DistortionRasterData {
 };
 
 static inline float2 dk1_unpack_float2(packed_float2 value) {
-    return float2(value.x, value.y);
+    return float2(value[0], value[1]);
 }
 
 vertex DK1DistortionRasterData dk1_distortion_vertex(
@@ -33,16 +33,16 @@ vertex DK1DistortionRasterData dk1_distortion_vertex(
     constant DK1DistortionUniforms &uniforms [[buffer(1)]],
     uint vertex_id [[vertex_id]]
 ) {
-    DK1DistortionVertexIn vertex = vertices[vertex_id];
+    DK1DistortionVertexIn input_vertex = vertices[vertex_id];
     float2 uv_scale = dk1_unpack_float2(uniforms.source_uv_scale);
     float2 uv_offset = dk1_unpack_float2(uniforms.source_uv_offset);
 
     DK1DistortionRasterData out;
-    out.position = float4(dk1_unpack_float2(vertex.screen_pos_ndc), 0.0, 1.0);
-    out.shade = vertex.shade;
-    out.uv_r = dk1_unpack_float2(vertex.tan_eye_angles_r) * uv_scale + uv_offset;
-    out.uv_g = dk1_unpack_float2(vertex.tan_eye_angles_g) * uv_scale + uv_offset;
-    out.uv_b = dk1_unpack_float2(vertex.tan_eye_angles_b) * uv_scale + uv_offset;
+    out.position = float4(dk1_unpack_float2(input_vertex.screen_pos_ndc), 0.0, 1.0);
+    out.shade = input_vertex.shade;
+    out.uv_r = dk1_unpack_float2(input_vertex.tan_eye_angles_r) * uv_scale + uv_offset;
+    out.uv_g = dk1_unpack_float2(input_vertex.tan_eye_angles_g) * uv_scale + uv_offset;
+    out.uv_b = dk1_unpack_float2(input_vertex.tan_eye_angles_b) * uv_scale + uv_offset;
     return out;
 }
 
