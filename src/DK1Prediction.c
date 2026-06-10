@@ -15,8 +15,31 @@ static DK1Vector3 vec3_scale(DK1Vector3 v, double scale) {
     return (DK1Vector3){v.x * scale, v.y * scale, v.z * scale};
 }
 
+static double vec3_dot(DK1Vector3 a, DK1Vector3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static DK1Vector3 vec3_cross(DK1Vector3 a, DK1Vector3 b) {
+    return (DK1Vector3){
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
 static double vec3_norm(DK1Vector3 v) {
     return sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+static int vec3_is_finite(DK1Vector3 v) {
+    return isfinite(v.x) && isfinite(v.y) && isfinite(v.z);
+}
+
+static int vec3_normalize_checked(DK1Vector3 v, DK1Vector3 *out_v) {
+    double norm = vec3_norm(v);
+    if (norm <= 1e-12 || !isfinite(norm)) return 0;
+    *out_v = vec3_scale(v, 1.0 / norm);
+    return 1;
 }
 
 static DK1Quaternion quat_identity(void) {
@@ -122,6 +145,155 @@ int dk1_predict_state(
     out_prediction->right_eye_world = vec3_add(
         pivot_predicted,
         dk1_quat_rotate_vec3(relative_rotation, right_from_pivot)
+    );
+    return DK1_OK;
+}
+
+static void write_node_transform(
+    DK1Vector3 position,
+    DK1Vector3 right,
+    DK1Vector3 up,
+    DK1Vector3 back,
+    double out_transform[16]
+) {
+    out_transform[0] = right.x;
+    out_transform[1] = right.y;
+    out_transform[2] = right.z;
+    out_transform[3] = 0.0;
+
+    out_transform[4] = up.x;
+    out_transform[5] = up.y;
+    out_transform[6] = up.z;
+    out_transform[7] = 0.0;
+
+    out_transform[8] = back.x;
+    out_transform[9] = back.y;
+    out_transform[10] = back.z;
+    out_transform[11] = 0.0;
+
+    out_transform[12] = position.x;
+    out_transform[13] = position.y;
+    out_transform[14] = position.z;
+    out_transform[15] = 1.0;
+}
+
+static void write_view_transform(
+    DK1Vector3 position,
+    DK1Vector3 right,
+    DK1Vector3 up,
+    DK1Vector3 back,
+    double out_transform[16]
+) {
+    out_transform[0] = right.x;
+    out_transform[1] = up.x;
+    out_transform[2] = back.x;
+    out_transform[3] = 0.0;
+
+    out_transform[4] = right.y;
+    out_transform[5] = up.y;
+    out_transform[6] = back.y;
+    out_transform[7] = 0.0;
+
+    out_transform[8] = right.z;
+    out_transform[9] = up.z;
+    out_transform[10] = back.z;
+    out_transform[11] = 0.0;
+
+    out_transform[12] = -vec3_dot(right, position);
+    out_transform[13] = -vec3_dot(up, position);
+    out_transform[14] = -vec3_dot(back, position);
+    out_transform[15] = 1.0;
+}
+
+static void write_eye_settings(
+    DK1Vector3 position,
+    DK1Vector3 right,
+    DK1Vector3 up,
+    DK1Vector3 forward,
+    DK1SCNCameraEyeSettings *out_eye
+) {
+    DK1Vector3 back = vec3_scale(forward, -1.0);
+
+    out_eye->position_world = position;
+    out_eye->right_world = right;
+    out_eye->up_world = up;
+    out_eye->forward_world = forward;
+    write_node_transform(
+        position,
+        right,
+        up,
+        back,
+        out_eye->node_transform_column_major
+    );
+    write_view_transform(
+        position,
+        right,
+        up,
+        back,
+        out_eye->view_transform_column_major
+    );
+}
+
+int dk1_scn_camera_settings_from_prediction(
+    const DK1PredictedState *prediction,
+    DK1SCNCameraSettings *out_settings
+) {
+    if (!prediction || !out_settings) return DK1_ERROR_INVALID_ARGUMENT;
+    if (
+        !vec3_is_finite(prediction->look_dir_world) ||
+        !vec3_is_finite(prediction->left_eye_world) ||
+        !vec3_is_finite(prediction->right_eye_world)
+    ) {
+        return DK1_ERROR_INVALID_ARGUMENT;
+    }
+
+    DK1Vector3 forward;
+    if (!vec3_normalize_checked(prediction->look_dir_world, &forward)) {
+        return DK1_ERROR_INVALID_ARGUMENT;
+    }
+
+    DK1Vector3 back = vec3_scale(forward, -1.0);
+    DK1Vector3 right_hint;
+    DK1Vector3 up;
+    if (!vec3_normalize_checked(
+        vec3_sub(prediction->right_eye_world, prediction->left_eye_world),
+        &right_hint
+    )) {
+        right_hint = (DK1Vector3){1.0, 0.0, 0.0};
+    }
+
+    if (!vec3_normalize_checked(vec3_cross(back, right_hint), &up)) {
+        DK1Vector3 fallback_up = fabs(back.y) < 0.99
+            ? (DK1Vector3){0.0, 1.0, 0.0}
+            : (DK1Vector3){1.0, 0.0, 0.0};
+        DK1Vector3 fallback_right;
+        if (!vec3_normalize_checked(vec3_cross(fallback_up, back), &fallback_right)) {
+            fallback_right = (DK1Vector3){1.0, 0.0, 0.0};
+        }
+        right_hint = fallback_right;
+        if (!vec3_normalize_checked(vec3_cross(back, right_hint), &up)) {
+            up = (DK1Vector3){0.0, 1.0, 0.0};
+        }
+    }
+
+    DK1Vector3 right;
+    if (!vec3_normalize_checked(vec3_cross(up, back), &right)) {
+        return DK1_ERROR_INVALID_ARGUMENT;
+    }
+
+    write_eye_settings(
+        prediction->left_eye_world,
+        right,
+        up,
+        forward,
+        &out_settings->eyes[DK1_EYE_LEFT]
+    );
+    write_eye_settings(
+        prediction->right_eye_world,
+        right,
+        up,
+        forward,
+        &out_settings->eyes[DK1_EYE_RIGHT]
     );
     return DK1_OK;
 }

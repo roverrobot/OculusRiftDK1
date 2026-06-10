@@ -89,6 +89,18 @@ int dk1_predict_state(
     DK1PredictedState *out_prediction
 );
 
+/**
+ * Build SceneKit-friendly per-eye camera settings from a predicted state.
+ * The matrices are column-major. node_transform_column_major can be copied
+ * into a simd_float4x4-style camera-node transform; view_transform_column_major
+ * is the inverse world-to-camera transform. Projection/lens settings remain
+ * application-specific.
+ */
+int dk1_scn_camera_settings_from_prediction(
+    const DK1PredictedState *prediction,
+    DK1SCNCameraSettings *out_settings
+);
+
 int dk1_tracker_get_config(
     const DK1Tracker *tracker,
     DK1Config *out_config

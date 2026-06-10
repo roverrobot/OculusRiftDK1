@@ -139,6 +139,19 @@ typedef struct DK1PredictedState {
     DK1Vector3 right_eye_world;
 } DK1PredictedState;
 
+typedef struct DK1SCNCameraEyeSettings {
+    DK1Vector3 position_world;
+    DK1Vector3 right_world;
+    DK1Vector3 up_world;
+    DK1Vector3 forward_world;
+    double node_transform_column_major[16];
+    double view_transform_column_major[16];
+} DK1SCNCameraEyeSettings;
+
+typedef struct DK1SCNCameraSettings {
+    DK1SCNCameraEyeSettings eyes[2];
+} DK1SCNCameraSettings;
+
 typedef struct DK1Sample {
     uint16_t timestamp;
     uint8_t sample_count;

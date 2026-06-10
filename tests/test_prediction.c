@@ -53,6 +53,19 @@ static void check_vec3_near(
     check_near(component_name, actual.z, z, tolerance);
 }
 
+static void check_matrix_near(
+    const char *name,
+    const double actual[16],
+    const double expected[16],
+    double tolerance
+) {
+    char component_name[128];
+    for (size_t i = 0; i < 16; ++i) {
+        snprintf(component_name, sizeof(component_name), "%s[%zu]", name, i);
+        check_near(component_name, actual[i], expected[i], tolerance);
+    }
+}
+
 static DK1TrackerState base_state(void) {
     DK1TrackerState state = {0};
     state.initialized = 1;
@@ -146,12 +159,170 @@ static void test_invalid_arguments(void) {
     );
 }
 
+static void test_scn_camera_settings_identity_pose(void) {
+    DK1PredictedState prediction = {
+        .look_dir_world = {0.0, 0.0, -1.0},
+        .left_eye_world = {-0.032, 0.10, -0.16},
+        .right_eye_world = {0.032, 0.10, -0.16}
+    };
+    DK1SCNCameraSettings settings;
+
+    int result = dk1_scn_camera_settings_from_prediction(&prediction, &settings);
+
+    check_int_equal("scn_identity_result", result, DK1_OK);
+    check_vec3_near(
+        "scn_identity_left_position",
+        settings.eyes[DK1_EYE_LEFT].position_world,
+        -0.032,
+        0.10,
+        -0.16,
+        1e-12
+    );
+    check_vec3_near(
+        "scn_identity_right_position",
+        settings.eyes[DK1_EYE_RIGHT].position_world,
+        0.032,
+        0.10,
+        -0.16,
+        1e-12
+    );
+    check_vec3_near(
+        "scn_identity_right_axis",
+        settings.eyes[DK1_EYE_LEFT].right_world,
+        1.0,
+        0.0,
+        0.0,
+        1e-12
+    );
+    check_vec3_near(
+        "scn_identity_up_axis",
+        settings.eyes[DK1_EYE_LEFT].up_world,
+        0.0,
+        1.0,
+        0.0,
+        1e-12
+    );
+    check_vec3_near(
+        "scn_identity_forward_axis",
+        settings.eyes[DK1_EYE_LEFT].forward_world,
+        0.0,
+        0.0,
+        -1.0,
+        1e-12
+    );
+
+    const double expected_left_node[16] = {
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        -0.0, -0.0, 1.0, 0.0,
+        -0.032, 0.10, -0.16, 1.0
+    };
+    const double expected_left_view[16] = {
+        1.0, 0.0, -0.0, 0.0,
+        0.0, 1.0, -0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.032, -0.10, 0.16, 1.0
+    };
+    check_matrix_near(
+        "scn_identity_left_node",
+        settings.eyes[DK1_EYE_LEFT].node_transform_column_major,
+        expected_left_node,
+        1e-12
+    );
+    check_matrix_near(
+        "scn_identity_left_view",
+        settings.eyes[DK1_EYE_LEFT].view_transform_column_major,
+        expected_left_view,
+        1e-12
+    );
+}
+
+static void test_scn_camera_settings_uses_stereo_baseline_for_roll(void) {
+    DK1PredictedState prediction = {
+        .look_dir_world = {-1.0, 0.0, 0.0},
+        .left_eye_world = {-0.16, 0.10, 0.032},
+        .right_eye_world = {-0.16, 0.10, -0.032}
+    };
+    DK1SCNCameraSettings settings;
+
+    int result = dk1_scn_camera_settings_from_prediction(&prediction, &settings);
+
+    check_int_equal("scn_yaw_result", result, DK1_OK);
+    check_vec3_near(
+        "scn_yaw_right_axis",
+        settings.eyes[DK1_EYE_LEFT].right_world,
+        0.0,
+        0.0,
+        -1.0,
+        1e-12
+    );
+    check_vec3_near(
+        "scn_yaw_up_axis",
+        settings.eyes[DK1_EYE_LEFT].up_world,
+        0.0,
+        1.0,
+        0.0,
+        1e-12
+    );
+    check_vec3_near(
+        "scn_yaw_forward_axis",
+        settings.eyes[DK1_EYE_LEFT].forward_world,
+        -1.0,
+        0.0,
+        0.0,
+        1e-12
+    );
+
+    const double expected_left_node[16] = {
+        0.0, 0.0, -1.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        1.0, -0.0, -0.0, 0.0,
+        -0.16, 0.10, 0.032, 1.0
+    };
+    check_matrix_near(
+        "scn_yaw_left_node",
+        settings.eyes[DK1_EYE_LEFT].node_transform_column_major,
+        expected_left_node,
+        1e-12
+    );
+}
+
+static void test_scn_camera_settings_invalid_arguments(void) {
+    DK1PredictedState prediction = {
+        .look_dir_world = {0.0, 0.0, -1.0},
+        .left_eye_world = {-0.032, 0.10, -0.16},
+        .right_eye_world = {0.032, 0.10, -0.16}
+    };
+    DK1SCNCameraSettings settings;
+
+    check_int_equal(
+        "scn_null_prediction",
+        dk1_scn_camera_settings_from_prediction(NULL, &settings),
+        DK1_ERROR_INVALID_ARGUMENT
+    );
+    check_int_equal(
+        "scn_null_settings",
+        dk1_scn_camera_settings_from_prediction(&prediction, NULL),
+        DK1_ERROR_INVALID_ARGUMENT
+    );
+
+    prediction.look_dir_world = (DK1Vector3){0.0, 0.0, 0.0};
+    check_int_equal(
+        "scn_zero_look",
+        dk1_scn_camera_settings_from_prediction(&prediction, &settings),
+        DK1_ERROR_INVALID_ARGUMENT
+    );
+}
+
 int main(void) {
     test_zero_dt_copies_pose();
     test_yaw_prediction_rotates_pose();
     test_reliable_pivot_translation_predicts_eye_positions();
     test_unreliable_pivot_holds_translation();
     test_invalid_arguments();
+    test_scn_camera_settings_identity_pose();
+    test_scn_camera_settings_uses_stereo_baseline_for_roll();
+    test_scn_camera_settings_invalid_arguments();
 
     if (failures) {
         fprintf(stderr, "%d prediction test(s) failed\n", failures);
