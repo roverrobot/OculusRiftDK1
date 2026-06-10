@@ -77,6 +77,18 @@ int dk1_tracker_get_state(
     DK1TrackerState *out_state
 );
 
+/**
+ * Predict eye positions and look direction from a tracker-state snapshot.
+ * dt_s is a non-negative future time offset in seconds. The prediction uses
+ * the state's current orientation, unbiased gyro, angular acceleration, and
+ * reliable pivot translation when available.
+ */
+int dk1_predict_state(
+    const DK1TrackerState *state,
+    double dt_s,
+    DK1PredictedState *out_prediction
+);
+
 int dk1_tracker_get_config(
     const DK1Tracker *tracker,
     DK1Config *out_config

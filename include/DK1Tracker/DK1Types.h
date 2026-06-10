@@ -133,6 +133,12 @@ typedef struct DK1TrackerState {
     uint64_t report_queue_dropped_count;
 } DK1TrackerState;
 
+typedef struct DK1PredictedState {
+    DK1Vector3 look_dir_world;
+    DK1Vector3 left_eye_world;
+    DK1Vector3 right_eye_world;
+} DK1PredictedState;
+
 typedef struct DK1Sample {
     uint16_t timestamp;
     uint8_t sample_count;
