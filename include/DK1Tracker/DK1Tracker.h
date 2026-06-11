@@ -5,6 +5,22 @@
 #include "DK1Error.h"
 #include <stddef.h>
 
+// Configuration report flags, Report ID 2.
+#define DK1_CONFIG_USE_RAW                 (1u << 0)
+#define DK1_CONFIG_INTERNAL_CALIBRATION    (1u << 1)
+#define DK1_CONFIG_USE_CALIBRATION         (1u << 2)
+#define DK1_CONFIG_AUTOCALIBRATION         (1u << 3)
+#define DK1_CONFIG_USE_MOTION_KEEPALIVE    (1u << 4)
+#define DK1_CONFIG_USE_COMMAND_KEEPALIVE   (1u << 5)
+#define DK1_CONFIG_USE_SENSOR_COORDINATES  (1u << 6)
+
+typedef struct DK1TrackerConfiguration {
+    uint16_t command_id;
+    uint8_t flags;
+    uint8_t packet_interval;
+    uint16_t sample_rate;
+} DK1TrackerConfiguration;
+
 /**
  * Optional raw report callback.  The library will invoke this callback with
  * a *normalized* 62‑byte DK1 report (ReportID byte 0 included).  The
@@ -29,6 +45,20 @@ int dk1_tracker_is_open(const DK1Tracker *tracker);
 
 int dk1_tracker_start(DK1Tracker *tracker);
 void dk1_tracker_stop(DK1Tracker *tracker);
+
+int dk1_tracker_get_configuration(
+    DK1Tracker *tracker,
+    DK1TrackerConfiguration *out_config
+);
+
+int dk1_tracker_set_configuration(
+    DK1Tracker *tracker,
+    uint8_t flags,
+    uint8_t packet_interval,
+    uint16_t sample_rate
+);
+
+int dk1_tracker_configure_full_rate_no_keepalive(DK1Tracker *tracker);
 
 /**
  * Register an optional parsed sample callback.

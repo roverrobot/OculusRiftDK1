@@ -336,6 +336,119 @@ void dk1_tracker_stop(DK1Tracker *tracker) {
     tracker->is_started = 0;
 }
 
+static uint16_t dk1_read_u16_le(const uint8_t *p)
+{
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+int dk1_tracker_get_configuration(
+    DK1Tracker *tracker,
+    DK1TrackerConfiguration *out_config
+) {
+    if (!tracker || !out_config) {
+        return DK1_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (!tracker->is_open) {
+        return DK1_ERROR_NOT_OPEN;
+    }
+
+    if (!tracker->backend.get_feature_report) {
+        return DK1_ERROR_UNSUPPORTED;
+    }
+
+    uint8_t report[7];
+    int result = tracker->backend.get_feature_report(
+        &tracker->backend,
+        2,          // Configuration report ID
+        report,
+        sizeof(report)
+    );
+
+    if (result != DK1_OK) {
+        return result;
+    }
+
+    if (report[0] != 2) {
+        return DK1_ERROR_IO;
+    }
+
+    out_config->command_id = dk1_read_u16_le(report + 1);
+    out_config->flags = report[3];
+    out_config->packet_interval = report[4];
+    out_config->sample_rate = dk1_read_u16_le(report + 5);
+
+    return DK1_OK;
+}
+
+int dk1_tracker_set_configuration(
+    DK1Tracker *tracker,
+    uint8_t flags,
+    uint8_t packet_interval,
+    uint16_t sample_rate
+) {
+    if (!tracker) {
+        return DK1_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (!tracker->is_open) {
+        return DK1_ERROR_NOT_OPEN;
+    }
+
+    /*
+     * Configuration Feature Report, Report ID 2.
+     *
+     * Layout:
+     *   byte 0: ReportID = 2
+     *   byte 1: CommandID low
+     *   byte 2: CommandID high
+     *   byte 3: flags
+     *   byte 4: PacketInterval
+     *   byte 5: SampleRate low
+     *   byte 6: SampleRate high
+     */
+    uint16_t cmd_id = tracker->keepalive_cmd_id++;
+
+    uint8_t report[7];
+    report[0] = 2;
+    report[1] = (uint8_t)(cmd_id & 0xff);
+    report[2] = (uint8_t)((cmd_id >> 8) & 0xff);
+    report[3] = flags;
+    report[4] = packet_interval;
+    report[5] = (uint8_t)(sample_rate & 0xff);
+    report[6] = (uint8_t)((sample_rate >> 8) & 0xff);
+
+    return tracker->backend.set_feature_report(
+        &tracker->backend,
+        report,
+        sizeof(report)
+    );
+}
+
+int dk1_tracker_configure_full_rate_no_keepalive(DK1Tracker *tracker)
+{
+    DK1TrackerConfiguration cfg;
+    int result = dk1_tracker_get_configuration(tracker, &cfg);
+    if (result != DK1_OK) return result;
+
+    cfg.flags |= DK1_CONFIG_USE_CALIBRATION | DK1_CONFIG_AUTOCALIBRATION;
+    cfg.flags &= (uint8_t)~DK1_CONFIG_USE_MOTION_KEEPALIVE;
+    cfg.flags &= (uint8_t)~DK1_CONFIG_USE_COMMAND_KEEPALIVE;
+    cfg.packet_interval = 0;
+    if (cfg.sample_rate == 0) cfg.sample_rate = 1000;
+
+    result = dk1_tracker_set_configuration(
+        tracker,
+        cfg.flags,
+        cfg.packet_interval,
+        cfg.sample_rate
+    );
+    if (result != DK1_OK) return result;
+
+    DK1TrackerConfiguration after;
+    return dk1_tracker_get_configuration(tracker, &after);
+}
+
 void dk1_tracker_set_sample_callback(DK1Tracker *tracker, DK1SampleCallback callback, void *user_data) {
     if (!tracker) return;
     pthread_mutex_lock(&tracker->callback_mutex);
@@ -391,7 +504,6 @@ int dk1_tracker_get_state(DK1Tracker *tracker, DK1TrackerState *out_state) {
     pthread_mutex_lock(&tracker->state_mutex);
     tracker_publish_state_locked(tracker);
     *out_state = tracker->latest_state;
-    printf("%f %f %f\n", out_state->orientation.x, out_state->orientation.y, out_state->orientation.z);
     pthread_mutex_unlock(&tracker->state_mutex);
     return DK1_OK;
 }
