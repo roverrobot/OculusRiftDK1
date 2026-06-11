@@ -24,6 +24,7 @@ static volatile sig_atomic_t keep_running = 1;
 // dumping).  The logic that sets the flag was updated accordingly.
 static int raw_enabled = 0;
 static int decode_blocks_enabled = 0;
+static int state_enabled = 0;
 static int summary_enabled = 0;
 static int csv_enabled = 0;
 static int stationary_enabled = 0;
@@ -115,6 +116,7 @@ typedef struct StationaryStats {
 static SummaryStats summary_stats;
 static StationaryStats stationary_stats;
 static ReportQueue report_queue;
+static DK1Tracker *state_tracker = NULL;
 
 static FILE *text_stream(void) {
     return text_output ? text_output : stdout;
@@ -615,6 +617,27 @@ static void process_queued_report(const QueuedReport *report) {
         }
     }
 
+    if (state_enabled && state_tracker) {
+        DK1TrackerState state;
+        int state_status = dk1_tracker_get_state(state_tracker, &state);
+        if (state_status == DK1_OK) {
+            fprintf(
+                text_stream(),
+                "state: sample_index=%llu initialized=%d ts=%u q=(%.6f, %.6f, %.6f, %.6f) drops=%llu\n",
+                (unsigned long long)state.sample_index,
+                state.initialized,
+                state.device_timestamp,
+                state.orientation.w,
+                state.orientation.x,
+                state.orientation.y,
+                state.orientation.z,
+                (unsigned long long)state.report_queue_dropped_count
+            );
+        } else {
+            fprintf(text_stream(), "state: unavailable status=%d\n", state_status);
+        }
+    }
+
     if (stationary_enabled) {
         update_stationary(
             report->data,
@@ -657,6 +680,7 @@ static void print_usage(FILE *out, const char *argv0) {
     fprintf(out, "  --raw                 Print raw normalized HID reports.\n");
     fprintf(out, "  --no-raw              Disable raw HID report printing.\n");
     fprintf(out, "  --decode-blocks       Print raw 16-byte motion block diagnostics.\n");
+    fprintf(out, "  --state               Print tracker-published state snapshots.\n");
     fprintf(out, "  --summary             Print end-of-run sample summary statistics.\n");
     fprintf(out, "  --csv [PATH|-]        Write CSV samples to stdout, '-' or PATH.\n");
     fprintf(out, "  --csv=PATH            Write CSV samples to PATH.\n");
@@ -677,6 +701,8 @@ int main(int argc, char *argv[]) {
             raw_enabled = 0;
         } else if (strcmp(argv[i], "--decode-blocks") == 0) {
             decode_blocks_enabled = 1;
+        } else if (strcmp(argv[i], "--state") == 0) {
+            state_enabled = 1;
         } else if (strcmp(argv[i], "--summary") == 0) {
             summary_enabled = 1;
         } else if (strcmp(argv[i], "--csv") == 0) {
@@ -769,6 +795,7 @@ int main(int argc, char *argv[]) {
         if (csv_output && csv_output != stdout) fclose(csv_output);
         return 1;
     }
+    state_tracker = tracker;
     fprintf(text_stream(), "Finding and opening backend device...\n");
     if (dk1_tracker_open(tracker) != DK1_OK) {
         fprintf(stderr, "Failed to open tracker\n");
@@ -824,6 +851,7 @@ int main(int argc, char *argv[]) {
     }
     dk1_tracker_close(tracker);
     dk1_tracker_destroy(tracker);
+    state_tracker = NULL;
     report_queue_destroy(&report_queue);
     if (csv_output && csv_output != stdout) {
         fclose(csv_output);

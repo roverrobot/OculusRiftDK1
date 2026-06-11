@@ -380,6 +380,7 @@ int dk1_tracker_set_keepalive(DK1Tracker *tracker, uint16_t interval_ms) {
 int dk1_tracker_get_orientation(DK1Tracker *tracker, DK1Quaternion *out_q) {
     if (!tracker || !out_q) return DK1_ERROR_INVALID_ARGUMENT;
     pthread_mutex_lock(&tracker->state_mutex);
+    tracker_publish_state_locked(tracker);
     *out_q = tracker->latest_state.orientation;
     pthread_mutex_unlock(&tracker->state_mutex);
     return DK1_OK;
@@ -388,7 +389,9 @@ int dk1_tracker_get_orientation(DK1Tracker *tracker, DK1Quaternion *out_q) {
 int dk1_tracker_get_state(DK1Tracker *tracker, DK1TrackerState *out_state) {
     if (!tracker || !out_state) return DK1_ERROR_INVALID_ARGUMENT;
     pthread_mutex_lock(&tracker->state_mutex);
+    tracker_publish_state_locked(tracker);
     *out_state = tracker->latest_state;
+    printf("%f %f %f\n", out_state->orientation.x, out_state->orientation.y, out_state->orientation.z);
     pthread_mutex_unlock(&tracker->state_mutex);
     return DK1_OK;
 }
