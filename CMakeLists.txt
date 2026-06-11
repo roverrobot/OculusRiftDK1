@@ -40,6 +40,9 @@ target_include_directories(DK1Tracker PUBLIC
 # Example – build as a normal command line binary
 add_executable(dk1_dump examples/dk1_dump.c)
 target_link_libraries(dk1_dump PRIVATE DK1Tracker)
+# Example – build as a normal command line binary
+add_executable(dk1_state_60hz examples/dk1_state_60hz.c)
+target_link_libraries(dk1_state_60hz PRIVATE DK1Tracker)
 
 include(CTest)
 if(BUILD_TESTING)
