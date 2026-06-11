@@ -424,16 +424,13 @@ static int mac_set_feature_report(
     // the DK1 firmware specification. We pull it out and hand the body
     // (without the ID prefix) to IOHIDDeviceSetReport.
     uint8_t report_id = buffer[0];
-    const uint8_t *body = buffer + 1;
-    size_t body_len = length - 1;
 
-    CFIndex reportLength = (CFIndex)body_len;
     IOReturn rc = IOHIDDeviceSetReport(
         impl->device,
         kIOHIDReportTypeFeature,
         (CFIndex)report_id,
-        (uint8_t *)body,
-        reportLength
+        (uint8_t *)buffer,
+        (CFIndex)length
     );
     if (rc != kIOReturnSuccess) {
         return DK1_ERROR_IO;
