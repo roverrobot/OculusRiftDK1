@@ -67,6 +67,13 @@ if(BUILD_TESTING)
     )
     add_test(NAME dk1_config COMMAND dk1_config_test)
 
+    add_executable(dk1_parser_test tests/test_parser.c)
+    target_link_libraries(dk1_parser_test PRIVATE DK1Tracker)
+    target_include_directories(dk1_parser_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME dk1_parser COMMAND dk1_parser_test)
+
     add_executable(dk1_prediction_test tests/test_prediction.c)
     target_link_libraries(dk1_prediction_test PRIVATE DK1Tracker)
     target_include_directories(dk1_prediction_test PRIVATE

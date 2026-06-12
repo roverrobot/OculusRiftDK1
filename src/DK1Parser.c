@@ -57,6 +57,32 @@ static void decode_vec3_21(const uint8_t *b, DK1Vector3 *out, double scale) {
     out->z = sign_extend_21(z) * scale;
 }
 
+static DK1Vector3 vec3_negate(DK1Vector3 v) {
+    return (DK1Vector3){-v.x, -v.y, -v.z};
+}
+
+/*
+ * Calibrated DK1 reports use a device frame with +X left, +Y down, and
+ * +Z forward. The head/neck and SceneKit-facing model uses +X right,
+ * +Y up, and -Z forward.
+ *
+ * Accelerometer rows behave as gravity/down in the DK1 report frame, while
+ * the estimator consumes specific force/up in the model frame, so those two
+ * sign flips cancel. Gyro is an axial vector, so the handedness flip also
+ * cancels. Magnetometer is a polar vector and must be negated.
+ */
+static DK1Vector3 report_accel_to_model_specific_force(DK1Vector3 accel) {
+    return accel;
+}
+
+static DK1Vector3 report_gyro_to_model_angular_velocity(DK1Vector3 gyro) {
+    return gyro;
+}
+
+static DK1Vector3 report_mag_to_model_field(DK1Vector3 mag) {
+    return vec3_negate(mag);
+}
+
 // Parse a 16‑byte motion sample block containing 6 × 21‑bit values.
 // The layout is assumed to be: accel X, Y, Z followed by gyro X, Y, Z.
 static void parse_motion_sample_16bytes(
@@ -68,6 +94,8 @@ static void parse_motion_sample_16bytes(
 
     decode_vec3_21(p,     accel, scale);  // bytes 0..7
     decode_vec3_21(p + 8, gyro,  scale);  // bytes 8..15
+    *accel = report_accel_to_model_specific_force(*accel);
+    *gyro = report_gyro_to_model_angular_velocity(*gyro);
 }
 
 int dk1_parse_input_report(
@@ -101,9 +129,11 @@ int dk1_parse_input_report(
         s->sample_count = sample_count;
         s->temperature_c = temp_raw / 100.0;
         /* Magnetometer */
-        s->mag.x = read_i16_le(p + 56) / 1.0;
-        s->mag.y = read_i16_le(p + 58) / 1.0;
-        s->mag.z = read_i16_le(p + 60) / 1.0;
+        s->mag = report_mag_to_model_field((DK1Vector3){
+            read_i16_le(p + 56) / 1.0,
+            read_i16_le(p + 58) / 1.0,
+            read_i16_le(p + 60) / 1.0
+        });
         /* Motion sample */
         parse_motion_sample_16bytes(p + 8 + i * 16, &s->accel, &s->gyro);
         (*out_count)++;
