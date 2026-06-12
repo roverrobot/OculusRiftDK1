@@ -476,6 +476,8 @@ static void integrate_pivot_position(
         0.5
     );
 
+    /* Use trapezoidal integration for both acceleration->velocity and
+     * velocity->position; Euler integration amplifies residual-accel drift. */
     double damping = est->head_neck_config.pivot_damping_per_second;
     if (damping > 0.0) {
         double half_damping_dt = 0.5 * damping * dt;

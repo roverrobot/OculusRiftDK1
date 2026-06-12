@@ -142,7 +142,7 @@ static void test_report_timestamp_expansion(void) {
     check_near("new_report_time", state.time_s, 0.002, 1e-12);
 }
 
-static void test_pivot_position_integrates_clean_acceleration(void) {
+static void test_pivot_position_uses_trapezoidal_integration(void) {
     DK1Estimator estimator;
     DK1TrackerState state;
     DK1HeadNeckConfig config = {
@@ -167,6 +167,15 @@ static void test_pivot_position_integrates_clean_acceleration(void) {
     check_vec3_near("pivot_accel_world", state.pivot_accel_world, 1.0, 0.0, 0.0, 1e-9);
     check_vec3_near("pivot_velocity_world", state.pivot_velocity_world, 0.5, 0.0, 0.0, 1e-9);
     check_vec3_near("pivot_position_world", state.pivot_position_world, 0.25, 0.0, 0.0, 1e-9);
+
+    sample.timestamp = 2000;
+    sample.accel = (DK1Vector3){3.0, 9.80665, 0.0};
+    dk1_estimator_update(&estimator, &sample);
+    dk1_estimator_get_state(&estimator, &state);
+
+    check_vec3_near("pivot_accel_world_second", state.pivot_accel_world, 3.0, 0.0, 0.0, 1e-9);
+    check_vec3_near("pivot_velocity_world_second", state.pivot_velocity_world, 2.5, 0.0, 0.0, 1e-9);
+    check_vec3_near("pivot_position_world_second", state.pivot_position_world, 1.75, 0.0, 0.0, 1e-9);
     check_int_equal("pivot_reliable_clean", (uint64_t)state.pivot_position_reliable, 1);
     check_int_equal("pivot_skip_clean", state.pivot_integration_skipped_count, 0);
 }
@@ -348,7 +357,7 @@ int main(void) {
     test_initial_orientation_and_pose();
     test_gyro_integration_uses_trapezoidal_step();
     test_report_timestamp_expansion();
-    test_pivot_position_integrates_clean_acceleration();
+    test_pivot_position_uses_trapezoidal_integration();
     test_pivot_integration_skips_oversized_report_group();
     test_head_neck_config_sets_recent_fit_geometry();
     test_mag_calibration_validation();
