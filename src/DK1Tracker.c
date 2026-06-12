@@ -258,11 +258,38 @@ void dk1_tracker_destroy(DK1Tracker *tracker) {
     free(tracker);
 }
 
+static uint8_t tracker_physical_sample_flags(uint8_t flags) {
+    flags &= (uint8_t)~(DK1_CONFIG_USE_RAW | DK1_CONFIG_USE_CALIBRATION);
+    flags |= DK1_CONFIG_AUTOCALIBRATION;
+    return flags;
+}
+
+static int tracker_configure_physical_samples(DK1Tracker *tracker) {
+    DK1TrackerConfiguration cfg;
+    int result = dk1_tracker_get_configuration(tracker, &cfg);
+    if (result != DK1_OK) return result;
+
+    return dk1_tracker_set_configuration(
+        tracker,
+        tracker_physical_sample_flags(cfg.flags),
+        cfg.packet_interval,
+        cfg.sample_rate
+    );
+}
+
 int dk1_tracker_open(DK1Tracker *tracker) {
     if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
     int res = tracker->backend.open(&tracker->backend, 0x2833, 0x0001);
     if (res == DK1_OK) {
         tracker->is_open = 1;
+
+        int config_result = tracker_configure_physical_samples(tracker);
+        if (config_result != DK1_OK) {
+            tracker->backend.close(&tracker->backend);
+            tracker->is_open = 0;
+            return config_result;
+        }
+
         tracker->backend.set_raw_report_callback(&tracker->backend, internal_report_cb, tracker);
     }
     return res;
@@ -431,7 +458,7 @@ int dk1_tracker_configure_full_rate_no_keepalive(DK1Tracker *tracker)
     int result = dk1_tracker_get_configuration(tracker, &cfg);
     if (result != DK1_OK) return result;
 
-    cfg.flags |= DK1_CONFIG_USE_CALIBRATION | DK1_CONFIG_AUTOCALIBRATION;
+    cfg.flags = tracker_physical_sample_flags(cfg.flags);
     cfg.flags &= (uint8_t)~DK1_CONFIG_USE_MOTION_KEEPALIVE;
     cfg.flags &= (uint8_t)~DK1_CONFIG_USE_COMMAND_KEEPALIVE;
     cfg.packet_interval = 0;
