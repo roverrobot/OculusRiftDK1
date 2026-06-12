@@ -14,6 +14,7 @@
 #define DK1_CONFIG_GRID_MAX 1024
 #define DK1_CONFIG_IPD_MM_MIN 40
 #define DK1_CONFIG_IPD_MM_MAX 90
+#define DK1_CONFIG_MM_TO_M 0.001
 
 void dk1_config_set_defaults(DK1Config *config) {
     if (!config) return;
@@ -23,6 +24,14 @@ void dk1_config_set_defaults(DK1Config *config) {
     config->grid_height = DK1_DEFAULT_GRID_HEIGHT;
     config->ipd_mm = DK1_DEFAULT_IPD_MM;
     config->gyro_bias = (DK1Vector3){0.0, 0.0, 0.0};
+    config->head_neck = (DK1HeadNeckConfig){
+        DK1_DEFAULT_HEAD_NECK_H_M,
+        DK1_DEFAULT_HEAD_NECK_ELL_M,
+        (double)DK1_DEFAULT_IPD_MM * DK1_CONFIG_MM_TO_M,
+        DK1_DEFAULT_HEAD_NECK_PIVOT_DAMPING_PER_SECOND,
+        DK1_DEFAULT_HEAD_NECK_MAX_DT_S,
+        DK1_DEFAULT_HEAD_NECK_MAX_REPORT_SAMPLE_COUNT
+    };
 }
 
 int dk1_config_validate(const DK1Config *config) {
@@ -48,6 +57,27 @@ int dk1_config_validate(const DK1Config *config) {
     if (!isfinite(config->gyro_bias.x) ||
         !isfinite(config->gyro_bias.y) ||
         !isfinite(config->gyro_bias.z)) {
+        return DK1_ERROR_PARSE;
+    }
+    if (config->head_neck.h_m < 0.0 || !isfinite(config->head_neck.h_m)) {
+        return DK1_ERROR_PARSE;
+    }
+    if (config->head_neck.ell_m < 0.0 || !isfinite(config->head_neck.ell_m)) {
+        return DK1_ERROR_PARSE;
+    }
+    if (config->head_neck.ipd_m <= 0.0 || !isfinite(config->head_neck.ipd_m)) {
+        return DK1_ERROR_PARSE;
+    }
+    if (
+        config->head_neck.pivot_damping_per_second < 0.0 ||
+        !isfinite(config->head_neck.pivot_damping_per_second)
+    ) {
+        return DK1_ERROR_PARSE;
+    }
+    if (config->head_neck.max_dt_s <= 0.0 || !isfinite(config->head_neck.max_dt_s)) {
+        return DK1_ERROR_PARSE;
+    }
+    if (config->head_neck.max_report_sample_count == 0) {
         return DK1_ERROR_PARSE;
     }
     return DK1_OK;
@@ -79,6 +109,27 @@ static int parse_int_value(const char *value, int *out_value) {
     if (*end != '\0') return 0;
 
     *out_value = (int)parsed;
+    return 1;
+}
+
+static int parse_double_value(const char *value, double *out_value) {
+    if (!value || !out_value) return 0;
+
+    char *end = NULL;
+    errno = 0;
+    double parsed = strtod(value, &end);
+    if (errno != 0 || end == value) return 0;
+    end = trim_whitespace(end);
+    if (*end != '\0') return 0;
+
+    *out_value = parsed;
+    return 1;
+}
+
+static int parse_mm_value_as_m(const char *value, double *out_m) {
+    double parsed_mm = 0.0;
+    if (!parse_double_value(value, &parsed_mm)) return 0;
+    *out_m = parsed_mm * DK1_CONFIG_MM_TO_M;
     return 1;
 }
 
@@ -149,10 +200,42 @@ static int parse_key_value_line(char *line, DK1Config *config) {
         return parse_int_value(value, &config->grid_height) ? DK1_OK : DK1_ERROR_PARSE;
     }
     if (strcmp(key, "ipd_mm") == 0) {
-        return parse_int_value(value, &config->ipd_mm) ? DK1_OK : DK1_ERROR_PARSE;
+        int ipd_mm = 0;
+        if (!parse_int_value(value, &ipd_mm)) return DK1_ERROR_PARSE;
+        config->ipd_mm = ipd_mm;
+        config->head_neck.ipd_m = (double)ipd_mm * DK1_CONFIG_MM_TO_M;
+        return DK1_OK;
     }
     if (strcmp(key, "gyro_bias_rad_s") == 0) {
         return parse_vector3_value(value, &config->gyro_bias) ? DK1_OK : DK1_ERROR_PARSE;
+    }
+    if (
+        strcmp(key, "h") == 0 ||
+        strcmp(key, "h_mm") == 0 ||
+        strcmp(key, "head_neck_h_mm") == 0
+    ) {
+        return parse_mm_value_as_m(value, &config->head_neck.h_m) ?
+            DK1_OK :
+            DK1_ERROR_PARSE;
+    }
+    if (
+        strcmp(key, "ell") == 0 ||
+        strcmp(key, "ell_mm") == 0 ||
+        strcmp(key, "head_neck_ell_mm") == 0
+    ) {
+        return parse_mm_value_as_m(value, &config->head_neck.ell_m) ?
+            DK1_OK :
+            DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "h_m") == 0 || strcmp(key, "head_neck_h_m") == 0) {
+        return parse_double_value(value, &config->head_neck.h_m) ?
+            DK1_OK :
+            DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "ell_m") == 0 || strcmp(key, "head_neck_ell_m") == 0) {
+        return parse_double_value(value, &config->head_neck.ell_m) ?
+            DK1_OK :
+            DK1_ERROR_PARSE;
     }
 
     return DK1_ERROR_PARSE;
@@ -277,6 +360,8 @@ int dk1_config_save_path(const char *path, const DK1Config *config) {
     ok = ok && fprintf(file, "grid_width %d\n", config->grid_width) >= 0;
     ok = ok && fprintf(file, "grid_height %d\n", config->grid_height) >= 0;
     ok = ok && fprintf(file, "ipd_mm %d\n", config->ipd_mm) >= 0;
+    ok = ok && fprintf(file, "h %.17g\n", config->head_neck.h_m / DK1_CONFIG_MM_TO_M) >= 0;
+    ok = ok && fprintf(file, "ell %.17g\n", config->head_neck.ell_m / DK1_CONFIG_MM_TO_M) >= 0;
     ok = ok && fprintf(
         file,
         "gyro_bias_rad_s %.17g %.17g %.17g\n",

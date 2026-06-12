@@ -198,8 +198,8 @@ static void test_head_neck_config_sets_recent_fit_geometry(void) {
     DK1Estimator estimator;
     DK1TrackerState state;
     DK1HeadNeckConfig config = {
-        .h_m = 0.0726,
-        .ell_m = 0.1588,
+        .h_m = 0.10113,
+        .ell_m = 0.15902,
         .ipd_m = 0.064,
         .pivot_damping_per_second = 2.0,
         .max_dt_s = 0.02,
@@ -216,7 +216,7 @@ static void test_head_neck_config_sets_recent_fit_geometry(void) {
     dk1_estimator_update(&estimator, &sample);
     dk1_estimator_get_state(&estimator, &state);
 
-    check_vec3_near("fit_eye_center_world", state.eye_center_world, 0.0, 0.0726, -0.1588, 1e-12);
+    check_vec3_near("fit_eye_center_world", state.eye_center_world, 0.0, 0.10113, -0.15902, 1e-12);
     check_near("fit_pivot_damping", state.pivot_damping_per_second, 2.0, 1e-12);
     check_near("fit_max_dt", state.timing_max_dt_s, 0.02, 1e-12);
 }

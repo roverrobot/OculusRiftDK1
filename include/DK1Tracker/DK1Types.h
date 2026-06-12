@@ -46,6 +46,12 @@ typedef struct DK1HeadNeckConfig {
     uint8_t max_report_sample_count;
 } DK1HeadNeckConfig;
 
+#define DK1_DEFAULT_HEAD_NECK_H_M 0.10
+#define DK1_DEFAULT_HEAD_NECK_ELL_M 0.16
+#define DK1_DEFAULT_HEAD_NECK_PIVOT_DAMPING_PER_SECOND 2.0
+#define DK1_DEFAULT_HEAD_NECK_MAX_DT_S 0.02
+#define DK1_DEFAULT_HEAD_NECK_MAX_REPORT_SAMPLE_COUNT 3u
+
 enum {
     DK1_DEFAULT_LEFT_DIAL = 5,
     DK1_DEFAULT_RIGHT_DIAL = 5,
@@ -61,6 +67,7 @@ typedef struct DK1Config {
     int grid_height;
     int ipd_mm;
     DK1Vector3 gyro_bias;
+    DK1HeadNeckConfig head_neck;
 } DK1Config;
 
 typedef struct DK1DistortionMeshVertex {

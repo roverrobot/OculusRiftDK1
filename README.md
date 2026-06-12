@@ -35,12 +35,18 @@ right_dial 5
 grid_width 64
 grid_height 64
 ipd_mm 64
+h 101.13
+ell 159.02
 gyro_bias_rad_s -0.0412516 0.0256156 0.0005428
 ```
 
-If the file is missing, the library uses the values shown above, except the
-default gyro bias is `0 0 0`. Dial values must be in the range `0..10`; grid
-dimensions must be positive; `ipd_mm` must be in the range `40..90`.
+The `h` and `ell` head/neck model values are in millimeters; `h_m` and `ell_m`
+are also accepted if you want to write meters explicitly. If the file is
+missing, the library uses the dial, grid, and IPD defaults shown above, head/neck
+defaults of `h 100` and `ell 160`, and a gyro bias of `0 0 0`. Missing values or
+unknown keys are treated as a corrupted config file. Dial values must be in the
+range `0..10`; grid dimensions must be positive; `ipd_mm` must be in the range
+`40..90`.
 
 To estimate that bias, place the headset on a stationary surface, keep firmware
 `USE_CALIBRATION` disabled, and run:

@@ -154,8 +154,8 @@ int dk1_tracker_set_mag_calibration(
 
 /**
  * Configure Gamma head/neck geometry and pivot integration guards.
- * A recent real-data fit can be represented with h_m ~= 0.0726 and
- * ell_m ~= 0.1588, but callers should treat these as calibration values.
+ * A recent no-pivot real-data fit can be represented with h_m ~= 0.101 and
+ * ell_m ~= 0.159, but callers should treat these as calibration values.
  */
 int dk1_tracker_set_head_neck_config(
     DK1Tracker *tracker,

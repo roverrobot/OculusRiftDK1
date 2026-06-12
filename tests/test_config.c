@@ -62,6 +62,36 @@ static void check_vector_close(
     check_double_close(name, actual.z, expected.z);
 }
 
+static void check_head_neck_config(
+    const char *prefix,
+    const DK1HeadNeckConfig *config,
+    double h_m,
+    double ell_m,
+    double ipd_m
+) {
+    char name[128];
+    snprintf(name, sizeof(name), "%s.h_m", prefix);
+    check_double_close(name, config->h_m, h_m);
+    snprintf(name, sizeof(name), "%s.ell_m", prefix);
+    check_double_close(name, config->ell_m, ell_m);
+    snprintf(name, sizeof(name), "%s.ipd_m", prefix);
+    check_double_close(name, config->ipd_m, ipd_m);
+    snprintf(name, sizeof(name), "%s.pivot_damping_per_second", prefix);
+    check_double_close(
+        name,
+        config->pivot_damping_per_second,
+        DK1_DEFAULT_HEAD_NECK_PIVOT_DAMPING_PER_SECOND
+    );
+    snprintf(name, sizeof(name), "%s.max_dt_s", prefix);
+    check_double_close(name, config->max_dt_s, DK1_DEFAULT_HEAD_NECK_MAX_DT_S);
+    snprintf(name, sizeof(name), "%s.max_report_sample_count", prefix);
+    check_int_equal(
+        name,
+        (int)config->max_report_sample_count,
+        (int)DK1_DEFAULT_HEAD_NECK_MAX_REPORT_SAMPLE_COUNT
+    );
+}
+
 static int write_text_file(const char *path, const char *text) {
     FILE *file = fopen(path, "w");
     if (!file) return 0;
@@ -92,6 +122,7 @@ static void test_defaults(void) {
     dk1_config_set_defaults(&config);
     check_config("defaults", &config, 5, 5, 64, 64, 64);
     check_vector_close("defaults.gyro_bias", config.gyro_bias, (DK1Vector3){0.0, 0.0, 0.0});
+    check_head_neck_config("defaults.head_neck", &config.head_neck, 0.10, 0.16, 0.064);
     check_int_equal("defaults_validate", dk1_config_validate(&config), DK1_OK);
 }
 
@@ -102,6 +133,7 @@ static void test_missing_file_uses_defaults(const char *home) {
     check_int_equal("missing_load", dk1_config_load_default(&config), DK1_OK);
     check_config("missing_load", &config, 5, 5, 64, 64, 64);
     check_vector_close("missing_load.gyro_bias", config.gyro_bias, (DK1Vector3){0.0, 0.0, 0.0});
+    check_head_neck_config("missing_load.head_neck", &config.head_neck, 0.10, 0.16, 0.064);
 }
 
 static void test_valid_file(const char *home) {
@@ -122,6 +154,8 @@ static void test_valid_file(const char *home) {
             "grid_width 32\n"
             "grid_height 48\n"
             "ipd_mm 67\n"
+            "h 101.13\n"
+            "ell 159.02\n"
             "gyro_bias_rad_s -0.0412516 0.0256156 0.0005428\n"
         )) {
         fprintf(stderr, "failed to write valid config\n");
@@ -137,6 +171,13 @@ static void test_valid_file(const char *home) {
         config.gyro_bias,
         (DK1Vector3){-0.0412516, 0.0256156, 0.0005428}
     );
+    check_head_neck_config(
+        "valid_load.head_neck",
+        &config.head_neck,
+        0.10113,
+        0.15902,
+        0.067
+    );
 }
 
 static void test_save_file(const char *home) {
@@ -151,6 +192,9 @@ static void test_save_file(const char *home) {
     config.grid_height = 50;
     config.ipd_mm = 68;
     config.gyro_bias = (DK1Vector3){-0.01, 0.02, -0.03};
+    config.head_neck.h_m = 0.10113;
+    config.head_neck.ell_m = 0.15902;
+    config.head_neck.ipd_m = 0.068;
 
     if (!make_config_path(config_path, sizeof(config_path), home)) {
         fprintf(stderr, "failed to format config path\n");
@@ -162,6 +206,7 @@ static void test_save_file(const char *home) {
     check_int_equal("save_load_path", dk1_config_load_path(config_path, &loaded), DK1_OK);
     check_config("save_load", &loaded, 1, 9, 40, 50, 68);
     check_vector_close("save_load.gyro_bias", loaded.gyro_bias, config.gyro_bias);
+    check_head_neck_config("save_load.head_neck", &loaded.head_neck, 0.10113, 0.15902, 0.068);
 }
 
 static void test_invalid_file(const char *home) {
@@ -181,6 +226,17 @@ static void test_invalid_file(const char *home) {
     }
     check_int_equal(
         "invalid_dial",
+        dk1_config_load_path(config_path, &config),
+        DK1_ERROR_PARSE
+    );
+
+    if (!write_text_file(config_path, "left_dial\n")) {
+        fprintf(stderr, "failed to write missing-value config\n");
+        failures++;
+        return;
+    }
+    check_int_equal(
+        "missing_value",
         dk1_config_load_path(config_path, &config),
         DK1_ERROR_PARSE
     );
@@ -228,6 +284,17 @@ static void test_invalid_file(const char *home) {
         dk1_config_load_path(config_path, &config),
         DK1_ERROR_PARSE
     );
+
+    if (!write_text_file(config_path, "h -1\n")) {
+        fprintf(stderr, "failed to write invalid h config\n");
+        failures++;
+        return;
+    }
+    check_int_equal(
+        "invalid_head_neck_h",
+        dk1_config_load_path(config_path, &config),
+        DK1_ERROR_PARSE
+    );
 }
 
 static void test_tracker_loads_config(const char *home) {
@@ -243,6 +310,8 @@ static void test_tracker_loads_config(const char *home) {
             "grid_width 80\n"
             "grid_height 96\n"
             "ipd_mm 66\n"
+            "h 101.13\n"
+            "ell 159.02\n"
             "gyro_bias_rad_s -0.1 0.2 -0.3\n"
         )) {
         fprintf(stderr, "failed to write tracker config\n");
@@ -254,6 +323,27 @@ static void test_tracker_loads_config(const char *home) {
     check_int_equal("tracker_get_config", dk1_tracker_get_config(tracker, &config), DK1_OK);
     check_config("tracker_config", &config, 3, 7, 80, 96, 66);
     check_vector_close("tracker_config.gyro_bias", config.gyro_bias, (DK1Vector3){-0.1, 0.2, -0.3});
+    check_head_neck_config(
+        "tracker_config.head_neck",
+        &config.head_neck,
+        0.10113,
+        0.15902,
+        0.066
+    );
+
+    DK1HeadNeckConfig active_head_neck = {0};
+    check_int_equal(
+        "tracker_get_head_neck_config",
+        dk1_tracker_get_head_neck_config(tracker, &active_head_neck),
+        DK1_OK
+    );
+    check_head_neck_config(
+        "tracker_active_head_neck",
+        &active_head_neck,
+        0.10113,
+        0.15902,
+        0.066
+    );
     dk1_tracker_destroy(tracker);
 }
 

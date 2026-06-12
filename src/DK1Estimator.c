@@ -11,10 +11,12 @@
 #define DK1_G_MPS2 9.80665
 #define DK1_DEFAULT_SAMPLE_DT_S 0.001
 #define DK1_DEVICE_TIMESTAMP_TICK_S 0.001
-#define DK1_MAX_DT_S 0.02
+#define DK1_MAX_DT_S DK1_DEFAULT_HEAD_NECK_MAX_DT_S
 #define DK1_DEFAULT_YAW_CORRECTION_INTERVAL 20u
-#define DK1_DEFAULT_PIVOT_DAMPING_PER_SECOND 2.0
-#define DK1_DEFAULT_MAX_REPORT_SAMPLE_COUNT 3u
+#define DK1_DEFAULT_PIVOT_DAMPING_PER_SECOND \
+    DK1_DEFAULT_HEAD_NECK_PIVOT_DAMPING_PER_SECOND
+#define DK1_DEFAULT_MAX_REPORT_SAMPLE_COUNT \
+    DK1_DEFAULT_HEAD_NECK_MAX_REPORT_SAMPLE_COUNT
 
 typedef struct SampleTiming {
     double raw_dt_s;
@@ -165,9 +167,9 @@ static int mag_axis_order_is_valid(const int axis_order[3]) {
 
 static DK1HeadNeckConfig default_head_neck_config(void) {
     return (DK1HeadNeckConfig){
-        0.10,
-        0.16,
-        0.064,
+        DK1_DEFAULT_HEAD_NECK_H_M,
+        DK1_DEFAULT_HEAD_NECK_ELL_M,
+        (double)DK1_DEFAULT_IPD_MM * 0.001,
         DK1_DEFAULT_PIVOT_DAMPING_PER_SECOND,
         DK1_MAX_DT_S,
         DK1_DEFAULT_MAX_REPORT_SAMPLE_COUNT
