@@ -27,22 +27,30 @@ At tracker creation, the library reads:
 ~/.OculusRiftDK1/config.txt
 ```
 
-The file contains five whitespace-separated integers:
+The file is a key/value text format:
 
 ```text
-left_dial right_dial grid_width grid_height ipd_mm
+left_dial 5
+right_dial 5
+grid_width 64
+grid_height 64
+ipd_mm 64
+gyro_bias_rad_s -0.0412516 0.0256156 0.0005428
 ```
 
-Example:
+If the file is missing, the library uses the values shown above, except the
+default gyro bias is `0 0 0`. Dial values must be in the range `0..10`; grid
+dimensions must be positive; `ipd_mm` must be in the range `40..90`.
 
-```text
-5 5 64 64 64
+To estimate that bias, place the headset on a stationary surface, keep firmware
+`USE_CALIBRATION` disabled, and run:
+
+```bash
+build/dk1_calibrate --seconds 30
 ```
 
-If the file is missing, the library uses `5 5 64 64 64`. Legacy four-value
-files are still accepted and default `ipd_mm` to `64`. Dial values must be in
-the range `0..10`; grid dimensions must be positive; `ipd_mm` must be in the
-range `40..90`.
+The tool averages the stationary gyro readings and updates `config.txt`; future
+tracker instances apply that saved bias automatically.
 
 The dial and IPD values are used at tracker creation to precompute one
 distortion mesh per eye. Each mesh contains full-framebuffer screen positions

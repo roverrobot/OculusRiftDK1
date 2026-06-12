@@ -231,6 +231,7 @@ int dk1_tracker_create(DK1Tracker **out_tracker) {
     
     dk1_hid_backend_create_mac(&tracker->backend);
     dk1_estimator_init(&tracker->estimator);
+    dk1_estimator_set_gyro_bias(&tracker->estimator, tracker->config.gyro_bias);
     dk1_ring_buffer_init(&tracker->ring_buffer);
     atomic_init(&tracker->dropped_report_count, 0);
     int sync_result = tracker_init_sync(tracker);

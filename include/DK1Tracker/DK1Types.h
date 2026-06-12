@@ -60,6 +60,7 @@ typedef struct DK1Config {
     int grid_width;
     int grid_height;
     int ipd_mm;
+    DK1Vector3 gyro_bias;
 } DK1Config;
 
 typedef struct DK1DistortionMeshVertex {

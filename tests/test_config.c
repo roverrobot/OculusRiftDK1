@@ -2,6 +2,8 @@
 #include "DK1Tracker/DK1Error.h"
 #include "DK1Tracker/DK1Tracker.h"
 
+#include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +11,13 @@
 #include <unistd.h>
 
 static int failures = 0;
+
+static void check_double_close(const char *name, double actual, double expected) {
+    if (fabs(actual - expected) > 1e-12) {
+        fprintf(stderr, "%s: expected %.12f, got %.12f\n", name, expected, actual);
+        failures++;
+    }
+}
 
 static void check_int_equal(const char *name, int actual, int expected) {
     if (actual != expected) {
@@ -39,6 +48,20 @@ static void check_config(
     check_int_equal(name, config->ipd_mm, ipd_mm);
 }
 
+static void check_vector_close(
+    const char *prefix,
+    DK1Vector3 actual,
+    DK1Vector3 expected
+) {
+    char name[128];
+    snprintf(name, sizeof(name), "%s.x", prefix);
+    check_double_close(name, actual.x, expected.x);
+    snprintf(name, sizeof(name), "%s.y", prefix);
+    check_double_close(name, actual.y, expected.y);
+    snprintf(name, sizeof(name), "%s.z", prefix);
+    check_double_close(name, actual.z, expected.z);
+}
+
 static int write_text_file(const char *path, const char *text) {
     FILE *file = fopen(path, "w");
     if (!file) return 0;
@@ -60,28 +83,31 @@ static int make_config_path(char *buffer, size_t buffer_size, const char *home) 
 static int make_config_dir(char *buffer, size_t buffer_size, const char *home) {
     int written = snprintf(buffer, buffer_size, "%s/.OculusRiftDK1", home);
     if (written <= 0 || (size_t)written >= buffer_size) return 0;
-    return mkdir(buffer, 0700) == 0;
+    if (mkdir(buffer, 0700) == 0) return 1;
+    return errno == EEXIST;
 }
 
 static void test_defaults(void) {
     DK1Config config;
     dk1_config_set_defaults(&config);
     check_config("defaults", &config, 5, 5, 64, 64, 64);
+    check_vector_close("defaults.gyro_bias", config.gyro_bias, (DK1Vector3){0.0, 0.0, 0.0});
     check_int_equal("defaults_validate", dk1_config_validate(&config), DK1_OK);
 }
 
 static void test_missing_file_uses_defaults(const char *home) {
-    DK1Config config = {0, 0, 0, 0, 0};
+    DK1Config config = {0};
 
     check_int_equal("setenv_missing", setenv("HOME", home, 1), 0);
     check_int_equal("missing_load", dk1_config_load_default(&config), DK1_OK);
     check_config("missing_load", &config, 5, 5, 64, 64, 64);
+    check_vector_close("missing_load.gyro_bias", config.gyro_bias, (DK1Vector3){0.0, 0.0, 0.0});
 }
 
-static void test_legacy_valid_file(const char *home) {
+static void test_valid_file(const char *home) {
     char dir_path[512];
     char config_path[512];
-    DK1Config config = {0, 0, 0, 0, 0};
+    DK1Config config = {0};
 
     if (!make_config_dir(dir_path, sizeof(dir_path), home)) {
         fprintf(stderr, "failed to make config dir\n");
@@ -89,31 +115,53 @@ static void test_legacy_valid_file(const char *home) {
         return;
     }
     if (!make_config_path(config_path, sizeof(config_path), home) ||
-        !write_text_file(config_path, "2 8 32 48\n")) {
+        !write_text_file(
+            config_path,
+            "left_dial 2\n"
+            "right_dial 8\n"
+            "grid_width 32\n"
+            "grid_height 48\n"
+            "ipd_mm 67\n"
+            "gyro_bias_rad_s -0.0412516 0.0256156 0.0005428\n"
+        )) {
         fprintf(stderr, "failed to write valid config\n");
         failures++;
         return;
     }
 
     check_int_equal("setenv_valid", setenv("HOME", home, 1), 0);
-    check_int_equal("legacy_valid_load", dk1_config_load_default(&config), DK1_OK);
-    check_config("legacy_valid_load", &config, 2, 8, 32, 48, 64);
+    check_int_equal("valid_load", dk1_config_load_default(&config), DK1_OK);
+    check_config("valid_load", &config, 2, 8, 32, 48, 67);
+    check_vector_close(
+        "valid_load.gyro_bias",
+        config.gyro_bias,
+        (DK1Vector3){-0.0412516, 0.0256156, 0.0005428}
+    );
 }
 
-static void test_valid_file(const char *home) {
+static void test_save_file(const char *home) {
     char config_path[512];
-    DK1Config config = {0, 0, 0, 0, 0};
+    DK1Config config;
+    DK1Config loaded = {0};
 
-    if (!make_config_path(config_path, sizeof(config_path), home) ||
-        !write_text_file(config_path, "2 8 32 48 67\n")) {
-        fprintf(stderr, "failed to write valid config\n");
+    dk1_config_set_defaults(&config);
+    config.left_dial = 1;
+    config.right_dial = 9;
+    config.grid_width = 40;
+    config.grid_height = 50;
+    config.ipd_mm = 68;
+    config.gyro_bias = (DK1Vector3){-0.01, 0.02, -0.03};
+
+    if (!make_config_path(config_path, sizeof(config_path), home)) {
+        fprintf(stderr, "failed to format config path\n");
         failures++;
         return;
     }
 
-    check_int_equal("setenv_valid_ipd", setenv("HOME", home, 1), 0);
-    check_int_equal("valid_ipd_load", dk1_config_load_default(&config), DK1_OK);
-    check_config("valid_ipd_load", &config, 2, 8, 32, 48, 67);
+    check_int_equal("save_path", dk1_config_save_path(config_path, &config), DK1_OK);
+    check_int_equal("save_load_path", dk1_config_load_path(config_path, &loaded), DK1_OK);
+    check_config("save_load", &loaded, 1, 9, 40, 50, 68);
+    check_vector_close("save_load.gyro_bias", loaded.gyro_bias, config.gyro_bias);
 }
 
 static void test_invalid_file(const char *home) {
@@ -126,7 +174,7 @@ static void test_invalid_file(const char *home) {
         return;
     }
 
-    if (!write_text_file(config_path, "11 5 64 64\n")) {
+    if (!write_text_file(config_path, "left_dial 11\n")) {
         fprintf(stderr, "failed to write invalid dial config\n");
         failures++;
         return;
@@ -137,18 +185,18 @@ static void test_invalid_file(const char *home) {
         DK1_ERROR_PARSE
     );
 
-    if (!write_text_file(config_path, "5 5 64\n")) {
-        fprintf(stderr, "failed to write short config\n");
+    if (!write_text_file(config_path, "5 5 64 64 64\n")) {
+        fprintf(stderr, "failed to write numeric config\n");
         failures++;
         return;
     }
     check_int_equal(
-        "short_config",
+        "numeric_config",
         dk1_config_load_path(config_path, &config),
         DK1_ERROR_PARSE
     );
 
-    if (!write_text_file(config_path, "5 5 0 64\n")) {
+    if (!write_text_file(config_path, "grid_width 0\n")) {
         fprintf(stderr, "failed to write invalid grid config\n");
         failures++;
         return;
@@ -159,7 +207,7 @@ static void test_invalid_file(const char *home) {
         DK1_ERROR_PARSE
     );
 
-    if (!write_text_file(config_path, "5 5 64 64 0\n")) {
+    if (!write_text_file(config_path, "ipd_mm 0\n")) {
         fprintf(stderr, "failed to write invalid IPD config\n");
         failures++;
         return;
@@ -170,13 +218,13 @@ static void test_invalid_file(const char *home) {
         DK1_ERROR_PARSE
     );
 
-    if (!write_text_file(config_path, "5 5 64 64 64 1\n")) {
-        fprintf(stderr, "failed to write extra config\n");
+    if (!write_text_file(config_path, "gyro_bias_rad_s 1 2\n")) {
+        fprintf(stderr, "failed to write invalid gyro bias config\n");
         failures++;
         return;
     }
     check_int_equal(
-        "extra_config",
+        "invalid_gyro_bias",
         dk1_config_load_path(config_path, &config),
         DK1_ERROR_PARSE
     );
@@ -185,10 +233,18 @@ static void test_invalid_file(const char *home) {
 static void test_tracker_loads_config(const char *home) {
     char config_path[512];
     DK1Tracker *tracker = NULL;
-    DK1Config config = {0, 0, 0, 0, 0};
+    DK1Config config = {0};
 
     if (!make_config_path(config_path, sizeof(config_path), home) ||
-        !write_text_file(config_path, "3 7 80 96 66\n")) {
+        !write_text_file(
+            config_path,
+            "left_dial 3\n"
+            "right_dial 7\n"
+            "grid_width 80\n"
+            "grid_height 96\n"
+            "ipd_mm 66\n"
+            "gyro_bias_rad_s -0.1 0.2 -0.3\n"
+        )) {
         fprintf(stderr, "failed to write tracker config\n");
         failures++;
         return;
@@ -197,6 +253,7 @@ static void test_tracker_loads_config(const char *home) {
     check_int_equal("tracker_create", dk1_tracker_create(&tracker), DK1_OK);
     check_int_equal("tracker_get_config", dk1_tracker_get_config(tracker, &config), DK1_OK);
     check_config("tracker_config", &config, 3, 7, 80, 96, 66);
+    check_vector_close("tracker_config.gyro_bias", config.gyro_bias, (DK1Vector3){-0.1, 0.2, -0.3});
     dk1_tracker_destroy(tracker);
 }
 
@@ -210,7 +267,7 @@ int main(void) {
 
     test_defaults();
     test_missing_file_uses_defaults(home);
-    test_legacy_valid_file(home);
+    test_save_file(home);
     test_valid_file(home);
     test_invalid_file(home);
     test_tracker_loads_config(home);

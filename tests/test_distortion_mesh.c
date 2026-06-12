@@ -179,7 +179,14 @@ static void test_custom_grid_mesh(const char *home) {
 
     if (!make_config_dir(dir_path, sizeof(dir_path), home) ||
         !make_config_path(config_path, sizeof(config_path), home) ||
-        !write_text_file(config_path, "0 10 8 10 70\n")) {
+        !write_text_file(
+            config_path,
+            "left_dial 0\n"
+            "right_dial 10\n"
+            "grid_width 8\n"
+            "grid_height 10\n"
+            "ipd_mm 70\n"
+        )) {
         fprintf(stderr, "failed to write custom mesh config\n");
         failures++;
         return;
@@ -225,7 +232,14 @@ static void test_ipd_changes_mesh(const char *home) {
 
     if (!make_config_dir(dir_path, sizeof(dir_path), home) ||
         !make_config_path(config_path, sizeof(config_path), home) ||
-        !write_text_file(config_path, "5 5 64 64 58\n")) {
+        !write_text_file(
+            config_path,
+            "left_dial 5\n"
+            "right_dial 5\n"
+            "grid_width 64\n"
+            "grid_height 64\n"
+            "ipd_mm 58\n"
+        )) {
         fprintf(stderr, "failed to write IPD mesh config\n");
         failures++;
         return;
@@ -239,7 +253,14 @@ static void test_ipd_changes_mesh(const char *home) {
         DK1_OK
     );
 
-    if (!write_text_file(config_path, "5 5 64 64 70\n")) {
+    if (!write_text_file(
+            config_path,
+            "left_dial 5\n"
+            "right_dial 5\n"
+            "grid_width 64\n"
+            "grid_height 64\n"
+            "ipd_mm 70\n"
+        )) {
         fprintf(stderr, "failed to rewrite IPD mesh config\n");
         failures++;
         dk1_tracker_destroy(tracker_58);

@@ -43,6 +43,12 @@ target_link_libraries(dk1_dump PRIVATE DK1Tracker)
 # Example – build as a normal command line binary
 add_executable(dk1_state_60hz examples/dk1_state_60hz.c)
 target_link_libraries(dk1_state_60hz PRIVATE DK1Tracker)
+# Tool – collect stationary gyro bias and save it to the DK1 config.
+add_executable(dk1_calibrate examples/calibrate.c)
+target_link_libraries(dk1_calibrate PRIVATE DK1Tracker)
+target_include_directories(dk1_calibrate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -150,7 +156,7 @@ install(TARGETS DK1Tracker
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(TARGETS dk1_dump
+install(TARGETS dk1_dump dk1_calibrate
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

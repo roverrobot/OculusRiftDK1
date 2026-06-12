@@ -1,9 +1,14 @@
 #include "DK1Config.h"
 #include "DK1Tracker/DK1Error.h"
 
+#include <ctype.h>
 #include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #define DK1_CONFIG_GRID_MIN 1
 #define DK1_CONFIG_GRID_MAX 1024
@@ -17,6 +22,7 @@ void dk1_config_set_defaults(DK1Config *config) {
     config->grid_width = DK1_DEFAULT_GRID_WIDTH;
     config->grid_height = DK1_DEFAULT_GRID_HEIGHT;
     config->ipd_mm = DK1_DEFAULT_IPD_MM;
+    config->gyro_bias = (DK1Vector3){0.0, 0.0, 0.0};
 }
 
 int dk1_config_validate(const DK1Config *config) {
@@ -39,6 +45,126 @@ int dk1_config_validate(const DK1Config *config) {
         config->ipd_mm > DK1_CONFIG_IPD_MM_MAX) {
         return DK1_ERROR_PARSE;
     }
+    if (!isfinite(config->gyro_bias.x) ||
+        !isfinite(config->gyro_bias.y) ||
+        !isfinite(config->gyro_bias.z)) {
+        return DK1_ERROR_PARSE;
+    }
+    return DK1_OK;
+}
+
+static char *trim_whitespace(char *text) {
+    while (*text && isspace((unsigned char)*text)) {
+        text++;
+    }
+    if (*text == '\0') return text;
+
+    char *end = text + strlen(text) - 1;
+    while (end >= text && isspace((unsigned char)*end)) {
+        *end = '\0';
+        end--;
+    }
+    return text;
+}
+
+static int parse_int_value(const char *value, int *out_value) {
+    if (!value || !out_value) return 0;
+
+    char *end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (errno != 0 || end == value) return 0;
+    if (parsed < INT_MIN || parsed > INT_MAX) return 0;
+    end = trim_whitespace(end);
+    if (*end != '\0') return 0;
+
+    *out_value = (int)parsed;
+    return 1;
+}
+
+static int parse_vector3_value(const char *value, DK1Vector3 *out_value) {
+    if (!value || !out_value) return 0;
+
+    char *end = NULL;
+    errno = 0;
+    double x = strtod(value, &end);
+    if (errno != 0 || end == value) return 0;
+
+    char *previous_end = end;
+    errno = 0;
+    double y = strtod(end, &end);
+    if (errno != 0 || end == previous_end) return 0;
+
+    previous_end = end;
+    errno = 0;
+    double z = strtod(end, &end);
+    if (errno != 0 || end == previous_end) return 0;
+
+    end = trim_whitespace(end);
+    if (*end != '\0') return 0;
+
+    out_value->x = x;
+    out_value->y = y;
+    out_value->z = z;
+    return 1;
+}
+
+static int parse_key_value_line(char *line, DK1Config *config) {
+    char *comment = strchr(line, '#');
+    if (comment) *comment = '\0';
+
+    char *text = trim_whitespace(line);
+    if (*text == '\0') return DK1_OK;
+
+    char *key = text;
+    char *value = NULL;
+    char *equals = strchr(text, '=');
+    if (equals) {
+        *equals = '\0';
+        value = equals + 1;
+    } else {
+        value = text;
+        while (*value && !isspace((unsigned char)*value)) {
+            value++;
+        }
+        if (*value == '\0') return DK1_ERROR_PARSE;
+        *value = '\0';
+        value++;
+    }
+
+    key = trim_whitespace(key);
+    value = trim_whitespace(value);
+    if (*key == '\0' || *value == '\0') return DK1_ERROR_PARSE;
+
+    if (strcmp(key, "left_dial") == 0) {
+        return parse_int_value(value, &config->left_dial) ? DK1_OK : DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "right_dial") == 0) {
+        return parse_int_value(value, &config->right_dial) ? DK1_OK : DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "grid_width") == 0) {
+        return parse_int_value(value, &config->grid_width) ? DK1_OK : DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "grid_height") == 0) {
+        return parse_int_value(value, &config->grid_height) ? DK1_OK : DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "ipd_mm") == 0) {
+        return parse_int_value(value, &config->ipd_mm) ? DK1_OK : DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "gyro_bias_rad_s") == 0) {
+        return parse_vector3_value(value, &config->gyro_bias) ? DK1_OK : DK1_ERROR_PARSE;
+    }
+
+    return DK1_ERROR_PARSE;
+}
+
+static int parse_key_value_config(FILE *file, DK1Config *config) {
+    char line[512];
+    while (fgets(line, sizeof(line), file)) {
+        int result = parse_key_value_line(line, config);
+        if (result != DK1_OK) return result;
+    }
+    if (ferror(file)) return DK1_ERROR_IO;
     return DK1_OK;
 }
 
@@ -72,25 +198,13 @@ int dk1_config_load_path(const char *path, DK1Config *out_config) {
         return (errno == ENOENT) ? DK1_ERROR_NOT_FOUND : DK1_ERROR_IO;
     }
 
-    int extra = 0;
-    int count = fscanf(
-        file,
-        " %d %d %d %d %d %d",
-        &config.left_dial,
-        &config.right_dial,
-        &config.grid_width,
-        &config.grid_height,
-        &config.ipd_mm,
-        &extra
-    );
+    int parse_result = parse_key_value_config(file, &config);
     int close_result = fclose(file);
 
     if (close_result != 0) {
         return DK1_ERROR_IO;
     }
-    if (count != 4 && count != 5) {
-        return DK1_ERROR_PARSE;
-    }
+    if (parse_result != DK1_OK) return parse_result;
 
     int validation = dk1_config_validate(&config);
     if (validation != DK1_OK) {
@@ -126,4 +240,60 @@ int dk1_config_load_default(DK1Config *out_config) {
 
     *out_config = config;
     return DK1_OK;
+}
+
+static int ensure_parent_directory(const char *path) {
+    const char *last_slash = strrchr(path, '/');
+    if (!last_slash || last_slash == path) return DK1_OK;
+
+    size_t len = (size_t)(last_slash - path);
+    char dir[4096];
+    if (len >= sizeof(dir)) return DK1_ERROR_INVALID_ARGUMENT;
+    memcpy(dir, path, len);
+    dir[len] = '\0';
+
+    if (mkdir(dir, 0700) == 0) return DK1_OK;
+    if (errno == EEXIST) return DK1_OK;
+    return DK1_ERROR_IO;
+}
+
+int dk1_config_save_path(const char *path, const DK1Config *config) {
+    if (!path || !config) return DK1_ERROR_INVALID_ARGUMENT;
+
+    int validation = dk1_config_validate(config);
+    if (validation != DK1_OK) return validation;
+
+    int dir_result = ensure_parent_directory(path);
+    if (dir_result != DK1_OK) return dir_result;
+
+    errno = 0;
+    FILE *file = fopen(path, "w");
+    if (!file) return DK1_ERROR_IO;
+
+    int ok = 1;
+    ok = ok && fprintf(file, "# DK1Tracker configuration\n") >= 0;
+    ok = ok && fprintf(file, "left_dial %d\n", config->left_dial) >= 0;
+    ok = ok && fprintf(file, "right_dial %d\n", config->right_dial) >= 0;
+    ok = ok && fprintf(file, "grid_width %d\n", config->grid_width) >= 0;
+    ok = ok && fprintf(file, "grid_height %d\n", config->grid_height) >= 0;
+    ok = ok && fprintf(file, "ipd_mm %d\n", config->ipd_mm) >= 0;
+    ok = ok && fprintf(
+        file,
+        "gyro_bias_rad_s %.17g %.17g %.17g\n",
+        config->gyro_bias.x,
+        config->gyro_bias.y,
+        config->gyro_bias.z
+    ) >= 0;
+
+    if (fclose(file) != 0) ok = 0;
+    return ok ? DK1_OK : DK1_ERROR_IO;
+}
+
+int dk1_config_save_default(const DK1Config *config) {
+    if (!config) return DK1_ERROR_INVALID_ARGUMENT;
+
+    char path[4096];
+    int path_result = dk1_config_default_path(path, sizeof(path));
+    if (path_result != DK1_OK) return path_result;
+    return dk1_config_save_path(path, config);
 }
