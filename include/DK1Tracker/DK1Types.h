@@ -89,6 +89,14 @@ typedef struct DK1DistortionMesh {
     const uint32_t *indices;
 } DK1DistortionMesh;
 
+typedef struct DK1EyeProjection {
+    double left_tan;
+    double right_tan;
+    double top_tan;
+    double bottom_tan;
+    double eye_offset_m;
+} DK1EyeProjection;
+
 typedef struct DK1TrackerState {
     int initialized;
     uint64_t sample_index;

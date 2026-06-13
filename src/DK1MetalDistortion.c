@@ -1,19 +1,6 @@
 #include "DK1Tracker/DK1MetalDistortion.h"
-#include "DK1Config.h"
 #include "DK1Tracker/DK1Error.h"
-
-#define DK1_LENS_SEPARATION_M 0.0635
-#define DK1_VISIBLE_LENS_RADIUS_M 0.0175
-#define DK1_BASE_EYE_RELIEF_M 0.012760465
-
-static double eye_relief_for_dial(int dial) {
-    return DK1_BASE_EYE_RELIEF_M + ((double)dial - 5.0) * 0.001;
-}
-
-static double eye_offset_to_right_m(DK1Eye eye, double ipd_m) {
-    double offset = (ipd_m - DK1_LENS_SEPARATION_M) * 0.5;
-    return eye == DK1_EYE_RIGHT ? offset : -offset;
-}
+#include "DK1Tracker/DK1Tracker.h"
 
 int dk1_metal_distortion_copy_vertices(
     const DK1DistortionMesh *mesh,
@@ -59,19 +46,18 @@ int dk1_metal_distortion_make_eye_texture_uniforms(
         return DK1_ERROR_INVALID_ARGUMENT;
     }
 
-    int validation = dk1_config_validate(config);
-    if (validation != DK1_OK) return validation;
+    DK1EyeProjection projection;
+    int projection_result = dk1_config_make_eye_projection(config, eye, &projection);
+    if (projection_result != DK1_OK) return projection_result;
 
-    int dial = eye == DK1_EYE_RIGHT ? config->right_dial : config->left_dial;
-    double eye_relief_m = eye_relief_for_dial(dial);
-    double tan_half_fov = DK1_VISIBLE_LENS_RADIUS_M / eye_relief_m;
+    double tan_half_fov = projection.top_tan;
     double source_ndc_scale = 1.0 / tan_half_fov;
-    double ipd_m = (double)config->ipd_mm * 0.001;
-    double source_ndc_offset_x =
-        eye_offset_to_right_m(eye, ipd_m) / DK1_VISIBLE_LENS_RADIUS_M;
+    double tan_eye_angle_offset_x =
+        -0.5 * (projection.left_tan + projection.right_tan);
 
     out_uniforms->source_uv_scale[0] = (float)(0.5 * source_ndc_scale);
-    out_uniforms->source_uv_offset[0] = (float)(0.5 * source_ndc_offset_x + 0.5);
+    out_uniforms->source_uv_offset[0] =
+        (float)(0.5 * tan_eye_angle_offset_x * source_ndc_scale + 0.5);
     if (source_origin == DK1_METAL_SOURCE_ORIGIN_TOP_LEFT) {
         out_uniforms->source_uv_scale[1] = (float)(-0.5 * source_ndc_scale);
     } else {

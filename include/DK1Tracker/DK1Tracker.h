@@ -136,6 +136,31 @@ int dk1_tracker_get_config(
     DK1Config *out_config
 );
 
+/**
+ * Build the per-eye off-axis projection half-angle tangents for a DK1 config.
+ * left_tan and bottom_tan are negative; right_tan and top_tan are positive.
+ * Horizontal tangents include the configured IPD offset from the DK1's fixed
+ * lens separation. eye_offset_m is the signed stereo camera offset from the
+ * center eye, in meters: left negative, right positive. Both projection
+ * tangents and eye_offset_m are derived from config->ipd_mm, matching the
+ * distortion mesh.
+ */
+int dk1_config_make_eye_projection(
+    const DK1Config *config,
+    DK1Eye eye,
+    DK1EyeProjection *out_projection
+);
+
+/**
+ * Convenience wrapper around dk1_config_make_eye_projection using the
+ * tracker's active DK1Config.
+ */
+int dk1_tracker_get_eye_projection(
+    const DK1Tracker *tracker,
+    DK1Eye eye,
+    DK1EyeProjection *out_projection
+);
+
 int dk1_tracker_get_distortion_mesh(
     const DK1Tracker *tracker,
     DK1Eye eye,

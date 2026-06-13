@@ -94,6 +94,13 @@ if(BUILD_TESTING)
     )
     add_test(NAME dk1_distortion_mesh COMMAND dk1_distortion_mesh_test)
 
+    add_executable(dk1_eye_projection_test tests/test_eye_projection.c)
+    target_link_libraries(dk1_eye_projection_test PRIVATE DK1Tracker)
+    target_include_directories(dk1_eye_projection_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    add_test(NAME dk1_eye_projection COMMAND dk1_eye_projection_test)
+
     add_executable(dk1_metal_distortion_test tests/test_metal_distortion.c)
     target_link_libraries(dk1_metal_distortion_test PRIVATE DK1Tracker)
     target_include_directories(dk1_metal_distortion_test PRIVATE

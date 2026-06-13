@@ -1,5 +1,7 @@
 #include "DK1Distortion.h"
+#include "DK1Config.h"
 #include "DK1Tracker/DK1Error.h"
+#include "DK1Tracker/DK1Tracker.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -232,6 +234,11 @@ static double eye_offset_to_right_m(DK1Eye eye, double ipd_m) {
     return eye == DK1_EYE_RIGHT ? offset : -offset;
 }
 
+static double eye_offset_from_center_m(DK1Eye eye, double ipd_m) {
+    double offset = ipd_m * 0.5;
+    return eye == DK1_EYE_RIGHT ? offset : -offset;
+}
+
 static void chroma_scales(const DK1LensConfig *lens, double radius_squared, double scales[3]) {
     double base = lens_scale_radius_squared(lens, radius_squared);
     scales[0] = base * (1.0 + lens->chroma[0] + radius_squared * lens->chroma[1]);
@@ -431,6 +438,34 @@ static void build_indices(DK1DistortionMesh *mesh) {
             }
         }
     }
+}
+
+int dk1_config_make_eye_projection(
+    const DK1Config *config,
+    DK1Eye eye,
+    DK1EyeProjection *out_projection
+) {
+    if (!config || !out_projection) return DK1_ERROR_INVALID_ARGUMENT;
+    if (eye != DK1_EYE_LEFT && eye != DK1_EYE_RIGHT) {
+        return DK1_ERROR_INVALID_ARGUMENT;
+    }
+
+    int validation = dk1_config_validate(config);
+    if (validation != DK1_OK) return validation;
+
+    int dial = eye == DK1_EYE_RIGHT ? config->right_dial : config->left_dial;
+    double eye_relief_m = eye_relief_for_dial(dial);
+    double tan_half_fov = DK1_VISIBLE_LENS_RADIUS_M / eye_relief_m;
+    double ipd_m = ipd_m_for_config(config);
+    double offset_to_right_m = eye_offset_to_right_m(eye, ipd_m);
+    double tan_eye_angle_offset_x = offset_to_right_m / eye_relief_m;
+
+    out_projection->left_tan = -tan_half_fov - tan_eye_angle_offset_x;
+    out_projection->right_tan = tan_half_fov - tan_eye_angle_offset_x;
+    out_projection->top_tan = tan_half_fov;
+    out_projection->bottom_tan = -tan_half_fov;
+    out_projection->eye_offset_m = eye_offset_from_center_m(eye, ipd_m);
+    return DK1_OK;
 }
 
 int dk1_distortion_mesh_build(

@@ -64,6 +64,13 @@ plus separate red, green, and blue tangent-eye-angle sample coordinates. Mesh
 pointers returned by `dk1_tracker_get_distortion_mesh` are owned by the tracker
 and stay valid until `dk1_tracker_destroy`.
 
+Use `dk1_config_make_eye_projection` or `dk1_tracker_get_eye_projection` to get
+per-eye off-axis projection half-angle tangents from the same optical config.
+The returned `DK1EyeProjection` uses negative left/bottom and positive right/top
+tangents, and includes the signed stereo eye offset in meters for consumers such
+as Unity XR projection setup. These values are derived from `ipd_mm`, matching
+the distortion mesh.
+
 ## Metal Distortion Shader
 The build produces `build/DK1Distortion.metallib` when the Xcode Metal command
 line toolchain is available. If CMake reports that the Metal compiler is not

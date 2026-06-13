@@ -552,6 +552,15 @@ int dk1_tracker_get_config(const DK1Tracker *tracker, DK1Config *out_config) {
     return DK1_OK;
 }
 
+int dk1_tracker_get_eye_projection(
+    const DK1Tracker *tracker,
+    DK1Eye eye,
+    DK1EyeProjection *out_projection
+) {
+    if (!tracker) return DK1_ERROR_INVALID_ARGUMENT;
+    return dk1_config_make_eye_projection(&tracker->config, eye, out_projection);
+}
+
 int dk1_tracker_get_distortion_mesh(
     const DK1Tracker *tracker,
     DK1Eye eye,
