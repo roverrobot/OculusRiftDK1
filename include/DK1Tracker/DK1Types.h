@@ -51,6 +51,7 @@ typedef struct DK1HeadNeckConfig {
 #define DK1_DEFAULT_HEAD_NECK_PIVOT_DAMPING_PER_SECOND 2.0
 #define DK1_DEFAULT_HEAD_NECK_MAX_DT_S 0.02
 #define DK1_DEFAULT_HEAD_NECK_MAX_REPORT_SAMPLE_COUNT 3u
+#define DK1_DEFAULT_EYE_HEIGHT_M 1.675
 
 enum {
     DK1_DEFAULT_LEFT_DIAL = 5,
@@ -66,6 +67,7 @@ typedef struct DK1Config {
     int grid_width;
     int grid_height;
     int ipd_mm;
+    double eye_height_m;
     DK1Vector3 gyro_bias;
     DK1HeadNeckConfig head_neck;
 } DK1Config;

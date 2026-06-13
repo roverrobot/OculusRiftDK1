@@ -14,6 +14,8 @@
 #define DK1_CONFIG_GRID_MAX 1024
 #define DK1_CONFIG_IPD_MM_MIN 40
 #define DK1_CONFIG_IPD_MM_MAX 90
+#define DK1_CONFIG_EYE_HEIGHT_M_MIN 0.0
+#define DK1_CONFIG_EYE_HEIGHT_M_MAX 3.0
 #define DK1_CONFIG_MM_TO_M 0.001
 
 void dk1_config_set_defaults(DK1Config *config) {
@@ -23,6 +25,7 @@ void dk1_config_set_defaults(DK1Config *config) {
     config->grid_width = DK1_DEFAULT_GRID_WIDTH;
     config->grid_height = DK1_DEFAULT_GRID_HEIGHT;
     config->ipd_mm = DK1_DEFAULT_IPD_MM;
+    config->eye_height_m = DK1_DEFAULT_EYE_HEIGHT_M;
     config->gyro_bias = (DK1Vector3){0.0, 0.0, 0.0};
     config->head_neck = (DK1HeadNeckConfig){
         DK1_DEFAULT_HEAD_NECK_H_M,
@@ -52,6 +55,13 @@ int dk1_config_validate(const DK1Config *config) {
     }
     if (config->ipd_mm < DK1_CONFIG_IPD_MM_MIN ||
         config->ipd_mm > DK1_CONFIG_IPD_MM_MAX) {
+        return DK1_ERROR_PARSE;
+    }
+    if (
+        config->eye_height_m <= DK1_CONFIG_EYE_HEIGHT_M_MIN ||
+        config->eye_height_m > DK1_CONFIG_EYE_HEIGHT_M_MAX ||
+        !isfinite(config->eye_height_m)
+    ) {
         return DK1_ERROR_PARSE;
     }
     if (!isfinite(config->gyro_bias.x) ||
@@ -205,6 +215,16 @@ static int parse_key_value_line(char *line, DK1Config *config) {
         config->ipd_mm = ipd_mm;
         config->head_neck.ipd_m = (double)ipd_mm * DK1_CONFIG_MM_TO_M;
         return DK1_OK;
+    }
+    if (strcmp(key, "eye_height") == 0 || strcmp(key, "eye_height_m") == 0) {
+        return parse_double_value(value, &config->eye_height_m) ?
+            DK1_OK :
+            DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "eye_height_mm") == 0) {
+        return parse_mm_value_as_m(value, &config->eye_height_m) ?
+            DK1_OK :
+            DK1_ERROR_PARSE;
     }
     if (strcmp(key, "gyro_bias_rad_s") == 0) {
         return parse_vector3_value(value, &config->gyro_bias) ? DK1_OK : DK1_ERROR_PARSE;
@@ -360,6 +380,7 @@ int dk1_config_save_path(const char *path, const DK1Config *config) {
     ok = ok && fprintf(file, "grid_width %d\n", config->grid_width) >= 0;
     ok = ok && fprintf(file, "grid_height %d\n", config->grid_height) >= 0;
     ok = ok && fprintf(file, "ipd_mm %d\n", config->ipd_mm) >= 0;
+    ok = ok && fprintf(file, "eye_height %.17g\n", config->eye_height_m) >= 0;
     ok = ok && fprintf(file, "h %.17g\n", config->head_neck.h_m / DK1_CONFIG_MM_TO_M) >= 0;
     ok = ok && fprintf(file, "ell %.17g\n", config->head_neck.ell_m / DK1_CONFIG_MM_TO_M) >= 0;
     ok = ok && fprintf(

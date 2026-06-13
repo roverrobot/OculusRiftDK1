@@ -35,18 +35,24 @@ right_dial 5
 grid_width 64
 grid_height 64
 ipd_mm 64
+eye_height 1.675
 h 101.13
 ell 159.02
 gyro_bias_rad_s -0.0412516 0.0256156 0.0005428
 ```
 
+The `eye_height` value is the eye height from the ground in meters; `eye_height_m`
+is also accepted, and `eye_height_mm` is accepted if you want to write
+millimeters explicitly.
+
 The `h` and `ell` head/neck model values are in millimeters; `h_m` and `ell_m`
 are also accepted if you want to write meters explicitly. If the file is
-missing, the library uses the dial, grid, and IPD defaults shown above, head/neck
-defaults of `h 100` and `ell 160`, and a gyro bias of `0 0 0`. Missing values or
-unknown keys are treated as a corrupted config file. Dial values must be in the
-range `0..10`; grid dimensions must be positive; `ipd_mm` must be in the range
-`40..90`.
+missing, the library uses the dial, grid, IPD, and eye-height defaults shown
+above, head/neck defaults of `h 100` and `ell 160`, and a gyro bias of `0 0 0`.
+Missing values or unknown keys are treated as a corrupted config file. Dial
+values must be in the range `0..10`; grid dimensions must be positive; `ipd_mm`
+must be in the range `40..90`; `eye_height` must be in the range `(0, 3]`
+meters.
 
 To estimate that bias, place the headset on a stationary surface, keep firmware
 `USE_CALIBRATION` disabled, and run:

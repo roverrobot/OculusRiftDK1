@@ -33,7 +33,8 @@ static void check_config(
     int right_dial,
     int grid_width,
     int grid_height,
-    int ipd_mm
+    int ipd_mm,
+    double eye_height_m
 ) {
     char name[128];
     snprintf(name, sizeof(name), "%s.left_dial", prefix);
@@ -46,6 +47,8 @@ static void check_config(
     check_int_equal(name, config->grid_height, grid_height);
     snprintf(name, sizeof(name), "%s.ipd_mm", prefix);
     check_int_equal(name, config->ipd_mm, ipd_mm);
+    snprintf(name, sizeof(name), "%s.eye_height_m", prefix);
+    check_double_close(name, config->eye_height_m, eye_height_m);
 }
 
 static void check_vector_close(
@@ -120,7 +123,7 @@ static int make_config_dir(char *buffer, size_t buffer_size, const char *home) {
 static void test_defaults(void) {
     DK1Config config;
     dk1_config_set_defaults(&config);
-    check_config("defaults", &config, 5, 5, 64, 64, 64);
+    check_config("defaults", &config, 5, 5, 64, 64, 64, DK1_DEFAULT_EYE_HEIGHT_M);
     check_vector_close("defaults.gyro_bias", config.gyro_bias, (DK1Vector3){0.0, 0.0, 0.0});
     check_head_neck_config("defaults.head_neck", &config.head_neck, 0.10, 0.16, 0.064);
     check_int_equal("defaults_validate", dk1_config_validate(&config), DK1_OK);
@@ -131,7 +134,7 @@ static void test_missing_file_uses_defaults(const char *home) {
 
     check_int_equal("setenv_missing", setenv("HOME", home, 1), 0);
     check_int_equal("missing_load", dk1_config_load_default(&config), DK1_OK);
-    check_config("missing_load", &config, 5, 5, 64, 64, 64);
+    check_config("missing_load", &config, 5, 5, 64, 64, 64, DK1_DEFAULT_EYE_HEIGHT_M);
     check_vector_close("missing_load.gyro_bias", config.gyro_bias, (DK1Vector3){0.0, 0.0, 0.0});
     check_head_neck_config("missing_load.head_neck", &config.head_neck, 0.10, 0.16, 0.064);
 }
@@ -154,6 +157,7 @@ static void test_valid_file(const char *home) {
             "grid_width 32\n"
             "grid_height 48\n"
             "ipd_mm 67\n"
+            "eye_height 1.62\n"
             "h 101.13\n"
             "ell 159.02\n"
             "gyro_bias_rad_s -0.0412516 0.0256156 0.0005428\n"
@@ -165,7 +169,7 @@ static void test_valid_file(const char *home) {
 
     check_int_equal("setenv_valid", setenv("HOME", home, 1), 0);
     check_int_equal("valid_load", dk1_config_load_default(&config), DK1_OK);
-    check_config("valid_load", &config, 2, 8, 32, 48, 67);
+    check_config("valid_load", &config, 2, 8, 32, 48, 67, 1.62);
     check_vector_close(
         "valid_load.gyro_bias",
         config.gyro_bias,
@@ -191,6 +195,7 @@ static void test_save_file(const char *home) {
     config.grid_width = 40;
     config.grid_height = 50;
     config.ipd_mm = 68;
+    config.eye_height_m = 1.70;
     config.gyro_bias = (DK1Vector3){-0.01, 0.02, -0.03};
     config.head_neck.h_m = 0.10113;
     config.head_neck.ell_m = 0.15902;
@@ -204,7 +209,7 @@ static void test_save_file(const char *home) {
 
     check_int_equal("save_path", dk1_config_save_path(config_path, &config), DK1_OK);
     check_int_equal("save_load_path", dk1_config_load_path(config_path, &loaded), DK1_OK);
-    check_config("save_load", &loaded, 1, 9, 40, 50, 68);
+    check_config("save_load", &loaded, 1, 9, 40, 50, 68, 1.70);
     check_vector_close("save_load.gyro_bias", loaded.gyro_bias, config.gyro_bias);
     check_head_neck_config("save_load.head_neck", &loaded.head_neck, 0.10113, 0.15902, 0.068);
 }
@@ -274,6 +279,17 @@ static void test_invalid_file(const char *home) {
         DK1_ERROR_PARSE
     );
 
+    if (!write_text_file(config_path, "eye_height 0\n")) {
+        fprintf(stderr, "failed to write invalid eye height config\n");
+        failures++;
+        return;
+    }
+    check_int_equal(
+        "invalid_eye_height",
+        dk1_config_load_path(config_path, &config),
+        DK1_ERROR_PARSE
+    );
+
     if (!write_text_file(config_path, "gyro_bias_rad_s 1 2\n")) {
         fprintf(stderr, "failed to write invalid gyro bias config\n");
         failures++;
@@ -310,6 +326,7 @@ static void test_tracker_loads_config(const char *home) {
             "grid_width 80\n"
             "grid_height 96\n"
             "ipd_mm 66\n"
+            "eye_height 1.64\n"
             "h 101.13\n"
             "ell 159.02\n"
             "gyro_bias_rad_s -0.1 0.2 -0.3\n"
@@ -321,7 +338,7 @@ static void test_tracker_loads_config(const char *home) {
 
     check_int_equal("tracker_create", dk1_tracker_create(&tracker), DK1_OK);
     check_int_equal("tracker_get_config", dk1_tracker_get_config(tracker, &config), DK1_OK);
-    check_config("tracker_config", &config, 3, 7, 80, 96, 66);
+    check_config("tracker_config", &config, 3, 7, 80, 96, 66, 1.64);
     check_vector_close("tracker_config.gyro_bias", config.gyro_bias, (DK1Vector3){-0.1, 0.2, -0.3});
     check_head_neck_config(
         "tracker_config.head_neck",
