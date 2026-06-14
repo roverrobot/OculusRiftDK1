@@ -67,11 +67,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    result = dk1_tracker_set_keepalive(tracker, 10000);
-    if (result != DK1_OK) {
-        fprintf(stderr, "warning: dk1_tracker_set_keepalive failed: %d\n", result);
-    }
-
     result = dk1_tracker_start(tracker);
     if (result != DK1_OK) {
         fprintf(stderr, "dk1_tracker_start failed: %d\n", result);

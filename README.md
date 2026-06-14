@@ -64,6 +64,13 @@ build/dk1_calibrate --seconds 30
 The tool averages the stationary gyro readings and updates `config.txt`; future
 tracker instances apply that saved bias automatically.
 
+`dk1_tracker_open` starts automatic command keepalive refreshes. The library
+sends a 10 second DK1 keepalive timeout and refreshes it every
+`DK1_DEFAULT_KEEPALIVE_REFRESH_INTERVAL_MS`; custom refresh intervals set with
+`dk1_tracker_set_keepalive_refresh_interval` must be greater than zero and less
+than `DK1_KEEPALIVE_TIMEOUT_MS`. Apps can call `dk1_tracker_pause_keepalive` and
+`dk1_tracker_resume_keepalive` around deliberate pauses.
+
 The dial and IPD values are used at tracker creation to precompute one
 distortion mesh per eye. Each mesh contains full-framebuffer screen positions
 plus separate red, green, and blue tangent-eye-angle sample coordinates. Mesh

@@ -14,6 +14,11 @@
 #define DK1_CONFIG_USE_COMMAND_KEEPALIVE   (1u << 5)
 #define DK1_CONFIG_USE_SENSOR_COORDINATES  (1u << 6)
 
+/* The DK1 command keepalive timeout sent to the device is 10 seconds.
+ * Automatic refresh intervals must be strictly below this timeout. */
+#define DK1_KEEPALIVE_TIMEOUT_MS 10000u
+#define DK1_DEFAULT_KEEPALIVE_REFRESH_INTERVAL_MS 5000u
+
 typedef struct DK1TrackerConfiguration {
     uint16_t command_id;
     uint8_t flags;
@@ -87,10 +92,26 @@ int dk1_tracker_poll_sample(
     DK1Sample *out_sample
 );
 
+/**
+ * Send a one-shot keepalive timeout command to the device. Most applications
+ * should rely on the automatic keepalive started by dk1_tracker_open instead.
+ */
 int dk1_tracker_set_keepalive(
     DK1Tracker *tracker,
     uint16_t interval_ms
 );
+
+/**
+ * Configure the automatic keepalive refresh cadence. interval_ms must be
+ * nonzero and strictly less than DK1_KEEPALIVE_TIMEOUT_MS.
+ */
+int dk1_tracker_set_keepalive_refresh_interval(
+    DK1Tracker *tracker,
+    uint16_t interval_ms
+);
+
+void dk1_tracker_pause_keepalive(DK1Tracker *tracker);
+int dk1_tracker_resume_keepalive(DK1Tracker *tracker);
 
 int dk1_tracker_get_orientation(
     DK1Tracker *tracker,

@@ -158,7 +158,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    dk1_tracker_set_keepalive(tracker, 10000);
     dk1_tracker_set_sample_callback(tracker, sample_callback, &stats);
 
     result = dk1_tracker_start(tracker);

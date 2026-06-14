@@ -805,7 +805,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     fprintf(text_stream(), "Device opened successfully.\n");
-    dk1_tracker_set_keepalive(tracker, 10000);
     dk1_tracker_set_raw_report_callback(tracker, enqueue_report_cb, NULL);
     program_start_host_ts = monotonic_seconds();
     if (dk1_tracker_start(tracker) != DK1_OK) {
