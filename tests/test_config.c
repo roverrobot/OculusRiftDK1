@@ -335,6 +335,7 @@ static void test_tracker_loads_config(const char *home) {
     char config_path[512];
     DK1Tracker *tracker = NULL;
     DK1Config config = {0};
+    DK1TrackerState state = {0};
 
     if (!make_config_path(config_path, sizeof(config_path), home) ||
         !write_text_file(
@@ -379,6 +380,17 @@ static void test_tracker_loads_config(const char *home) {
         0.10113,
         0.15902,
         0.066
+    );
+    check_int_equal("tracker_get_state", dk1_tracker_get_state(tracker, &state), DK1_OK);
+    check_vector_close(
+        "tracker_state.left_eye_world",
+        state.left_eye_world,
+        (DK1Vector3){-0.033, 1.74113, -0.15902}
+    );
+    check_vector_close(
+        "tracker_state.right_eye_world",
+        state.right_eye_world,
+        (DK1Vector3){0.033, 1.74113, -0.15902}
     );
     dk1_tracker_destroy(tracker);
 }

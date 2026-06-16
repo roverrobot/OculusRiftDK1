@@ -384,6 +384,16 @@ int dk1_tracker_create(DK1Tracker **out_tracker) {
     
     dk1_hid_backend_create_mac(&tracker->backend);
     dk1_estimator_init(&tracker->estimator);
+    int eye_height_result = dk1_estimator_set_eye_height(
+        &tracker->estimator,
+        tracker->config.eye_height_m
+    );
+    if (eye_height_result != DK1_OK) {
+        dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_LEFT]);
+        dk1_distortion_mesh_destroy(&tracker->distortion_meshes[DK1_EYE_RIGHT]);
+        free(tracker);
+        return eye_height_result;
+    }
     dk1_estimator_set_gyro_bias(&tracker->estimator, tracker->config.gyro_bias);
     int head_neck_result = dk1_estimator_set_head_neck_config(
         &tracker->estimator,

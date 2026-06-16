@@ -453,6 +453,34 @@ static void reset_pivot_integration(DK1Estimator *est) {
     est->state.pivot_position_reliable = 1;
 }
 
+static DK1Vector3 current_neck_position_world(const DK1Estimator *est) {
+    return vec3_add(
+        est->pivot_position_world,
+        (DK1Vector3){0.0, est->eye_height_m, 0.0}
+    );
+}
+
+static void update_pose_fields(DK1Estimator *est) {
+    DK1Vector3 neck_position_world = current_neck_position_world(est);
+    DK1Vector3 eye_center_body = dk1_head_model_neck_to_eye_center(&est->head_model);
+
+    est->state.look_dir_world = dk1_head_model_looking_direction_world(
+        &est->head_model,
+        est->orientation
+    );
+    est->state.eye_center_world = vec3_add(
+        neck_position_world,
+        dk1_quat_rotate_vec3(est->orientation, eye_center_body)
+    );
+    dk1_head_model_eye_positions_world(
+        &est->head_model,
+        est->orientation,
+        neck_position_world,
+        &est->state.left_eye_world,
+        &est->state.right_eye_world
+    );
+}
+
 static void integrate_pivot_position(
     DK1Estimator *est,
     DK1Vector3 pivot_accel_world,
@@ -526,7 +554,6 @@ static void update_derived_state(
     double dt,
     int integrate_pivot
 ) {
-    DK1Vector3 eye_center_body = dk1_head_model_neck_to_eye_center(&est->head_model);
     DK1Vector3 tracker_rot_accel = dk1_head_model_tracker_rotational_accel(
         &est->head_model,
         unbiased_gyro,
@@ -549,18 +576,7 @@ static void update_derived_state(
         est->state.pivot_accel_body
     );
     integrate_pivot_position(est, est->state.pivot_accel_world, dt, integrate_pivot);
-
-    est->state.eye_center_world = vec3_add(
-        est->pivot_position_world,
-        dk1_quat_rotate_vec3(est->orientation, eye_center_body)
-    );
-    dk1_head_model_eye_positions_world(
-        &est->head_model,
-        est->orientation,
-        est->pivot_position_world,
-        &est->state.left_eye_world,
-        &est->state.right_eye_world
-    );
+    update_pose_fields(est);
 
     est->state.mag_calibrated = mag_calibrated;
     est->state.mag_correction_rate = est->mag_calibration.correction_rate;
@@ -590,9 +606,11 @@ void dk1_estimator_init(DK1Estimator *est) {
         DK1_DEFAULT_YAW_CORRECTION_INTERVAL;
     est->last_report_sample_dt_s = DK1_DEFAULT_SAMPLE_DT_S;
     dk1_head_model_init_default(&est->head_model);
+    est->eye_height_m = DK1_DEFAULT_EYE_HEIGHT_M;
     DK1HeadNeckConfig head_neck_config = default_head_neck_config();
     apply_head_neck_config(est, &head_neck_config);
     reset_pivot_integration(est);
+    update_pose_fields(est);
 }
 
 void dk1_estimator_update(DK1Estimator *est, const DK1Sample *sample) {
@@ -667,6 +685,16 @@ void dk1_estimator_get_state(const DK1Estimator *est, DK1TrackerState *out_state
     *out_state = est->state;
 }
 
+int dk1_estimator_set_eye_height(DK1Estimator *est, double eye_height_m) {
+    if (!est || eye_height_m <= 0.0 || !isfinite(eye_height_m)) {
+        return DK1_ERROR_INVALID_ARGUMENT;
+    }
+
+    est->eye_height_m = eye_height_m;
+    update_pose_fields(est);
+    return DK1_OK;
+}
+
 void dk1_estimator_set_gyro_bias(DK1Estimator *est, DK1Vector3 bias) {
     if (!est) return;
     est->gyro_bias = bias;
@@ -707,22 +735,7 @@ int dk1_estimator_set_head_neck_config(
 
     apply_head_neck_config(est, config);
     reset_pivot_integration(est);
-    DK1Vector3 eye_center_body = dk1_head_model_neck_to_eye_center(&est->head_model);
-    est->state.look_dir_world = dk1_head_model_looking_direction_world(
-        &est->head_model,
-        est->orientation
-    );
-    est->state.eye_center_world = vec3_add(
-        est->pivot_position_world,
-        dk1_quat_rotate_vec3(est->orientation, eye_center_body)
-    );
-    dk1_head_model_eye_positions_world(
-        &est->head_model,
-        est->orientation,
-        est->pivot_position_world,
-        &est->state.left_eye_world,
-        &est->state.right_eye_world
-    );
+    update_pose_fields(est);
     est->state.pivot_damping_per_second =
         est->head_neck_config.pivot_damping_per_second;
     est->state.timing_max_dt_s = configured_max_dt(est);
