@@ -167,12 +167,13 @@ static int mag_axis_order_is_valid(const int axis_order[3]) {
 
 static DK1HeadNeckConfig default_head_neck_config(void) {
     return (DK1HeadNeckConfig){
-        DK1_DEFAULT_HEAD_NECK_H_M,
-        DK1_DEFAULT_HEAD_NECK_ELL_M,
-        (double)DK1_DEFAULT_IPD_MM * 0.001,
-        DK1_DEFAULT_PIVOT_DAMPING_PER_SECOND,
-        DK1_MAX_DT_S,
-        DK1_DEFAULT_MAX_REPORT_SAMPLE_COUNT
+        .h_m = DK1_DEFAULT_HEAD_NECK_H_M,
+        .ell_m = DK1_DEFAULT_HEAD_NECK_ELL_M,
+        .ipd_m = (double)DK1_DEFAULT_IPD_MM * 0.001,
+        .pivot_damping_per_second = DK1_DEFAULT_PIVOT_DAMPING_PER_SECOND,
+        .max_dt_s = DK1_MAX_DT_S,
+        .max_report_sample_count = DK1_DEFAULT_MAX_REPORT_SAMPLE_COUNT,
+        .use_pivot_inference = 1
     };
 }
 
@@ -399,6 +400,9 @@ static SampleTiming estimator_sample_timing(DK1Estimator *est, const DK1Sample *
             est->state.timing_max_raw_dt_s = sample_dt;
         }
         est->last_report_timestamp = sample->timestamp;
+        if (!est->head_neck_config.use_pivot_inference) {
+            timing.pivot_integrate = 0;
+        }
         return timing;
     }
 
@@ -406,6 +410,9 @@ static SampleTiming estimator_sample_timing(DK1Estimator *est, const DK1Sample *
         timing.pivot_integrate = 0;
     }
     est->state.timing_last_raw_dt_s = fallback;
+    if (!est->head_neck_config.use_pivot_inference) {
+        timing.pivot_integrate = 0;
+    }
     return timing;
 }
 

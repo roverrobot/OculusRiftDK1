@@ -44,6 +44,10 @@ typedef struct DK1HeadNeckConfig {
     double pivot_damping_per_second;
     double max_dt_s;
     uint8_t max_report_sample_count;
+    /* Toggle the integration of inferred pivot movement.
+     * When set to 0, the estimator leaves pivot position/velocity unchanged.
+     * The default is 1. */
+    int use_pivot_inference;
 } DK1HeadNeckConfig;
 
 #define DK1_DEFAULT_HEAD_NECK_H_M 0.10

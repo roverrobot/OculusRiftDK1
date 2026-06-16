@@ -93,6 +93,8 @@ static void check_head_neck_config(
         (int)config->max_report_sample_count,
         (int)DK1_DEFAULT_HEAD_NECK_MAX_REPORT_SAMPLE_COUNT
     );
+    snprintf(name, sizeof(name), "%s.use_pivot_inference", prefix);
+    check_int_equal(name, config->use_pivot_inference, 1);
 }
 
 static int write_text_file(const char *path, const char *text) {
@@ -160,6 +162,7 @@ static void test_valid_file(const char *home) {
             "eye_height 1.62\n"
             "h 101.13\n"
             "ell 159.02\n"
+            "use_pivot_inference 1\n"
             "gyro_bias_rad_s -0.0412516 0.0256156 0.0005428\n"
         )) {
         fprintf(stderr, "failed to write valid config\n");
@@ -200,6 +203,7 @@ static void test_save_file(const char *home) {
     config.head_neck.h_m = 0.10113;
     config.head_neck.ell_m = 0.15902;
     config.head_neck.ipd_m = 0.068;
+    config.head_neck.use_pivot_inference = 0;
 
     if (!make_config_path(config_path, sizeof(config_path), home)) {
         fprintf(stderr, "failed to format config path\n");
@@ -211,7 +215,10 @@ static void test_save_file(const char *home) {
     check_int_equal("save_load_path", dk1_config_load_path(config_path, &loaded), DK1_OK);
     check_config("save_load", &loaded, 1, 9, 40, 50, 68, 1.70);
     check_vector_close("save_load.gyro_bias", loaded.gyro_bias, config.gyro_bias);
-    check_head_neck_config("save_load.head_neck", &loaded.head_neck, 0.10113, 0.15902, 0.068);
+    check_double_close("save_load.head_neck.h_m", loaded.head_neck.h_m, 0.10113);
+    check_double_close("save_load.head_neck.ell_m", loaded.head_neck.ell_m, 0.15902);
+    check_double_close("save_load.head_neck.ipd_m", loaded.head_neck.ipd_m, 0.068);
+    check_int_equal("save_load.head_neck.use_pivot_inference", loaded.head_neck.use_pivot_inference, 0);
 }
 
 static void test_invalid_file(const char *home) {
@@ -311,6 +318,17 @@ static void test_invalid_file(const char *home) {
         dk1_config_load_path(config_path, &config),
         DK1_ERROR_PARSE
     );
+
+    if (!write_text_file(config_path, "use_pivot_inference 2\n")) {
+        fprintf(stderr, "failed to write invalid pivot inference config\n");
+        failures++;
+        return;
+    }
+    check_int_equal(
+        "invalid_use_pivot_inference",
+        dk1_config_load_path(config_path, &config),
+        DK1_ERROR_PARSE
+    );
 }
 
 static void test_tracker_loads_config(const char *home) {
@@ -329,6 +347,7 @@ static void test_tracker_loads_config(const char *home) {
             "eye_height 1.64\n"
             "h 101.13\n"
             "ell 159.02\n"
+            "use_pivot_inference 1\n"
             "gyro_bias_rad_s -0.1 0.2 -0.3\n"
         )) {
         fprintf(stderr, "failed to write tracker config\n");

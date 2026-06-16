@@ -28,12 +28,13 @@ void dk1_config_set_defaults(DK1Config *config) {
     config->eye_height_m = DK1_DEFAULT_EYE_HEIGHT_M;
     config->gyro_bias = (DK1Vector3){0.0, 0.0, 0.0};
     config->head_neck = (DK1HeadNeckConfig){
-        DK1_DEFAULT_HEAD_NECK_H_M,
-        DK1_DEFAULT_HEAD_NECK_ELL_M,
-        (double)DK1_DEFAULT_IPD_MM * DK1_CONFIG_MM_TO_M,
-        DK1_DEFAULT_HEAD_NECK_PIVOT_DAMPING_PER_SECOND,
-        DK1_DEFAULT_HEAD_NECK_MAX_DT_S,
-        DK1_DEFAULT_HEAD_NECK_MAX_REPORT_SAMPLE_COUNT
+        .h_m = DK1_DEFAULT_HEAD_NECK_H_M,
+        .ell_m = DK1_DEFAULT_HEAD_NECK_ELL_M,
+        .ipd_m = (double)DK1_DEFAULT_IPD_MM * DK1_CONFIG_MM_TO_M,
+        .pivot_damping_per_second = DK1_DEFAULT_HEAD_NECK_PIVOT_DAMPING_PER_SECOND,
+        .max_dt_s = DK1_DEFAULT_HEAD_NECK_MAX_DT_S,
+        .max_report_sample_count = DK1_DEFAULT_HEAD_NECK_MAX_REPORT_SAMPLE_COUNT,
+        .use_pivot_inference = 1
     };
 }
 
@@ -90,6 +91,12 @@ int dk1_config_validate(const DK1Config *config) {
     if (config->head_neck.max_report_sample_count == 0) {
         return DK1_ERROR_PARSE;
     }
+    if (
+        config->head_neck.use_pivot_inference != 0 &&
+        config->head_neck.use_pivot_inference != 1
+    ) {
+        return DK1_ERROR_PARSE;
+    }
     return DK1_OK;
 }
 
@@ -140,6 +147,14 @@ static int parse_mm_value_as_m(const char *value, double *out_m) {
     double parsed_mm = 0.0;
     if (!parse_double_value(value, &parsed_mm)) return 0;
     *out_m = parsed_mm * DK1_CONFIG_MM_TO_M;
+    return 1;
+}
+
+static int parse_flag_value(const char *value, int *out_value) {
+    int parsed = 0;
+    if (!parse_int_value(value, &parsed)) return 0;
+    if (parsed != 0 && parsed != 1) return 0;
+    *out_value = parsed;
     return 1;
 }
 
@@ -254,6 +269,11 @@ static int parse_key_value_line(char *line, DK1Config *config) {
     }
     if (strcmp(key, "ell_m") == 0 || strcmp(key, "head_neck_ell_m") == 0) {
         return parse_double_value(value, &config->head_neck.ell_m) ?
+            DK1_OK :
+            DK1_ERROR_PARSE;
+    }
+    if (strcmp(key, "use_pivot_inference") == 0) {
+        return parse_flag_value(value, &config->head_neck.use_pivot_inference) ?
             DK1_OK :
             DK1_ERROR_PARSE;
     }
@@ -383,6 +403,11 @@ int dk1_config_save_path(const char *path, const DK1Config *config) {
     ok = ok && fprintf(file, "eye_height %.17g\n", config->eye_height_m) >= 0;
     ok = ok && fprintf(file, "h %.17g\n", config->head_neck.h_m / DK1_CONFIG_MM_TO_M) >= 0;
     ok = ok && fprintf(file, "ell %.17g\n", config->head_neck.ell_m / DK1_CONFIG_MM_TO_M) >= 0;
+    ok = ok && fprintf(
+        file,
+        "use_pivot_inference %d\n",
+        config->head_neck.use_pivot_inference
+    ) >= 0;
     ok = ok && fprintf(
         file,
         "gyro_bias_rad_s %.17g %.17g %.17g\n",

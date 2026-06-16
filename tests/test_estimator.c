@@ -151,7 +151,8 @@ static void test_pivot_position_uses_trapezoidal_integration(void) {
         .ipd_m = 0.064,
         .pivot_damping_per_second = 0.0,
         .max_dt_s = 2.0,
-        .max_report_sample_count = 3
+        .max_report_sample_count = 3,
+        .use_pivot_inference = 1
     };
     DK1Sample sample = stationary_sample(0);
 
@@ -178,6 +179,36 @@ static void test_pivot_position_uses_trapezoidal_integration(void) {
     check_vec3_near("pivot_position_world_second", state.pivot_position_world, 1.75, 0.0, 0.0, 1e-9);
     check_int_equal("pivot_reliable_clean", (uint64_t)state.pivot_position_reliable, 1);
     check_int_equal("pivot_skip_clean", state.pivot_integration_skipped_count, 0);
+}
+
+static void test_pivot_inference_can_be_disabled(void) {
+    DK1Estimator estimator;
+    DK1TrackerState state;
+    DK1HeadNeckConfig config = {
+        .h_m = 0.10,
+        .ell_m = 0.16,
+        .ipd_m = 0.064,
+        .pivot_damping_per_second = 0.0,
+        .max_dt_s = 2.0,
+        .max_report_sample_count = 3,
+        .use_pivot_inference = 0
+    };
+    DK1Sample sample = stationary_sample(0);
+
+    dk1_estimator_init(&estimator);
+    dk1_estimator_set_head_neck_config(&estimator, &config);
+    dk1_estimator_update(&estimator, &sample);
+
+    sample.timestamp = 1000;
+    sample.accel = (DK1Vector3){1.0, 9.80665, 0.0};
+    dk1_estimator_update(&estimator, &sample);
+    dk1_estimator_get_state(&estimator, &state);
+
+    check_vec3_near("disabled_pivot_accel_world", state.pivot_accel_world, 1.0, 0.0, 0.0, 1e-9);
+    check_vec3_near("disabled_pivot_velocity", state.pivot_velocity_world, 0.0, 0.0, 0.0, 1e-12);
+    check_vec3_near("disabled_pivot_position", state.pivot_position_world, 0.0, 0.0, 0.0, 1e-12);
+    check_int_equal("disabled_pivot_skips", state.pivot_integration_skipped_count, 1);
+    check_int_equal("disabled_pivot_reliable", (uint64_t)state.pivot_position_reliable, 0);
 }
 
 static void test_pivot_integration_skips_oversized_report_group(void) {
@@ -212,7 +243,8 @@ static void test_head_neck_config_sets_recent_fit_geometry(void) {
         .ipd_m = 0.064,
         .pivot_damping_per_second = 2.0,
         .max_dt_s = 0.02,
-        .max_report_sample_count = 3
+        .max_report_sample_count = 3,
+        .use_pivot_inference = 1
     };
     DK1Sample sample = stationary_sample(10);
 
@@ -358,6 +390,7 @@ int main(void) {
     test_gyro_integration_uses_trapezoidal_step();
     test_report_timestamp_expansion();
     test_pivot_position_uses_trapezoidal_integration();
+    test_pivot_inference_can_be_disabled();
     test_pivot_integration_skips_oversized_report_group();
     test_head_neck_config_sets_recent_fit_geometry();
     test_mag_calibration_validation();
