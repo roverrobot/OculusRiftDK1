@@ -454,9 +454,10 @@ static void reset_pivot_integration(DK1Estimator *est) {
 }
 
 static DK1Vector3 current_neck_position_world(const DK1Estimator *est) {
+    DK1Vector3 eye_center_body = dk1_head_model_neck_to_eye_center(&est->head_model);
     return vec3_add(
         est->pivot_position_world,
-        (DK1Vector3){0.0, est->eye_height_m, 0.0}
+        (DK1Vector3){0.0, est->eye_height_m - eye_center_body.y, 0.0}
     );
 }
 

@@ -89,9 +89,9 @@ static void test_initial_orientation_and_pose(void) {
     check_vec3_near("predicted_accel", state.predicted_accel, 0.0, 9.80665, 0.0, 1e-9);
     check_vec3_near("accel_residual", state.accel_residual, 0.0, 0.0, 0.0, 1e-9);
     check_vec3_near("look_dir_world", state.look_dir_world, 0.0, 0.0, -1.0, 1e-12);
-    check_vec3_near("eye_center_world", state.eye_center_world, 0.0, 1.775, -0.16, 1e-12);
-    check_vec3_near("left_eye_world", state.left_eye_world, -0.032, 1.775, -0.16, 1e-12);
-    check_vec3_near("right_eye_world", state.right_eye_world, 0.032, 1.775, -0.16, 1e-12);
+    check_vec3_near("eye_center_world", state.eye_center_world, 0.0, 1.675, -0.16, 1e-12);
+    check_vec3_near("left_eye_world", state.left_eye_world, -0.032, 1.675, -0.16, 1e-12);
+    check_vec3_near("right_eye_world", state.right_eye_world, 0.032, 1.675, -0.16, 1e-12);
     check_vec3_near("expected_north_world", state.expected_north_world, 1.0, 0.0, 0.0, 1e-12);
     check_vec3_near("observed_north_world", state.observed_north_world, 1.0, 0.0, 0.0, 1e-12);
     check_int_equal("north_window_sample_count", state.north_window_sample_count, 1);
@@ -259,7 +259,7 @@ static void test_head_neck_config_sets_recent_fit_geometry(void) {
     dk1_estimator_update(&estimator, &sample);
     dk1_estimator_get_state(&estimator, &state);
 
-    check_vec3_near("fit_eye_center_world", state.eye_center_world, 0.0, 1.77613, -0.15902, 1e-12);
+    check_vec3_near("fit_eye_center_world", state.eye_center_world, 0.0, 1.675, -0.15902, 1e-12);
     check_near("fit_pivot_damping", state.pivot_damping_per_second, 2.0, 1e-12);
     check_near("fit_max_dt", state.timing_max_dt_s, 0.02, 1e-12);
 }
@@ -276,9 +276,9 @@ static void test_eye_height_offsets_eye_positions(void) {
     );
     dk1_estimator_get_state(&estimator, &state);
 
-    check_vec3_near("height_eye_center_world", state.eye_center_world, 0.0, 1.35, -0.16, 1e-12);
-    check_vec3_near("height_left_eye_world", state.left_eye_world, -0.032, 1.35, -0.16, 1e-12);
-    check_vec3_near("height_right_eye_world", state.right_eye_world, 0.032, 1.35, -0.16, 1e-12);
+    check_vec3_near("height_eye_center_world", state.eye_center_world, 0.0, 1.25, -0.16, 1e-12);
+    check_vec3_near("height_left_eye_world", state.left_eye_world, -0.032, 1.25, -0.16, 1e-12);
+    check_vec3_near("height_right_eye_world", state.right_eye_world, 0.032, 1.25, -0.16, 1e-12);
 }
 
 static void test_mag_calibration_validation(void) {
